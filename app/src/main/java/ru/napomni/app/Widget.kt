@@ -7,6 +7,7 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.view.View
 import android.widget.RemoteViews
 import java.time.LocalDate
@@ -64,7 +65,8 @@ class Widget : AppWidgetProvider() {
             val zone = ZoneId.systemDefault()
             val today = Fmt.local(now, zone).toLocalDate()
             val list = Store.all(ctx).filter { it.isActive(now) }.sortedBy { it.shownAt(now) }.take(ROWS.size)
-            val v = RemoteViews(ctx.packageName, R.layout.widget)
+            val brass = Prefs.lookFlow(ctx).value == Look.BRASS
+            val v = RemoteViews(ctx.packageName, if (brass) R.layout.widget_a else R.layout.widget_b)
 
             v.setOnClickPendingIntent(
                 R.id.header,
@@ -80,6 +82,26 @@ class Widget : AppWidgetProvider() {
             DAYS.forEachIndexed { i, viewId ->
                 val d = today.plusDays(i + 1L)
                 v.setTextViewText(viewId, dayLabel(i + 1, d))
+                // Выходные — цветом и своим фоном, как в мастере и календаре.
+                val we = isWeekend(d)
+                val color = when {
+                    brass && we -> R.color.w_a_weekend
+                    brass -> R.color.w_a_text
+                    we -> R.color.w_b_weekend
+                    else -> R.color.w_b_text
+                }
+                // На 12+ цвет по ресурсу: рабочий стол сам берёт светлый или тёмный вариант.
+                if (Build.VERSION.SDK_INT >= 31) v.setColorStateList(viewId, "setTextColor", color)
+                else v.setTextColor(viewId, ctx.getColor(color))
+                v.setInt(
+                    viewId, "setBackgroundResource",
+                    when {
+                        brass && we -> R.drawable.wa_day_we
+                        brass -> R.drawable.wa_day
+                        we -> R.drawable.wb_day_we
+                        else -> R.drawable.wb_day
+                    },
+                )
                 v.setOnClickPendingIntent(viewId, quick(ctx, 21 + i, QuickAddActivity.PRESET_DAY, day = d))
             }
 

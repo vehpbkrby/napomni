@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Круг основного цвета с латунным кольцом внутри — как FAB в приложении. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item><shape android:shape="oval"><solid android:color="@color/w_a_primary" /></shape></item>
+    <item android:bottom="2dp" android:left="2dp" android:right="2dp" android:top="2dp">
+        <shape android:shape="oval"><stroke android:width="1dp" android:color="@color/w_a_accent" /></shape>
+    </item>
+</layer-list>

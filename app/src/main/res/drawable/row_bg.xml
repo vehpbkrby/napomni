@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Тонкая линия сверху строки: в виджете нельзя обычный View-разделитель. -->
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item><shape><solid android:color="@color/w_divider" /></shape></item>
-    <item android:top="1dp"><shape><solid android:color="@color/w_bg" /></shape></item>
-</layer-list>

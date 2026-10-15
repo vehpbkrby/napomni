@@ -1,12 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="bg">#F1F5F9</color>
-    <color name="launcher_bg">#2563EB</color>
-    <color name="w_bg">#FFFFFF</color>
-    <color name="w_text">#1B1B1F</color>
-    <color name="w_sub">#6B6B73</color>
-    <color name="w_accent">#2563EB</color>
-    <color name="w_on_accent">#FFFFFF</color>
-    <color name="w_chip_stroke">#33000000</color>
-    <color name="w_divider">#1A000000</color>
+    <color name="bg">#F4EFE6</color>
+    <color name="launcher_bg">#1B2B4B</color>
+    <color name="w_a_bg_top">#F8F4EC</color>
+    <color name="w_a_bg_bottom">#F0E9DD</color>
+    <color name="w_a_stroke">#D9CFBE</color>
+    <color name="w_a_text">#1A1F2B</color>
+    <color name="w_a_sub">#5C574E</color>
+    <color name="w_a_primary">#1B2B4B</color>
+    <color name="w_a_on_primary">#F7F2E8</color>
+    <color name="w_a_accent">#9C7A3C</color>
+    <color name="w_a_chip">#ECE5D8</color>
+    <color name="w_a_outline">#BFB29C</color>
+    <color name="w_a_weekend">#9E2F2F</color>
+    <color name="w_a_weekend_edge">#D9B5AC</color>
+    <color name="w_b_bg">#FFFFFF</color>
+    <color name="w_b_stroke">#D2D7D5</color>
+    <color name="w_b_text">#14181A</color>
+    <color name="w_b_sub">#566064</color>
+    <color name="w_b_accent">#0B6B4D</color>
+    <color name="w_b_on_accent">#FFFFFF</color>
+    <color name="w_b_chip">#E8EBEA</color>
+    <color name="w_b_outline">#B4BCB9</color>
+    <color name="w_b_weekend">#A3243B</color>
+    <color name="w_b_weekend_fill">#F4E6E9</color>
 </resources>

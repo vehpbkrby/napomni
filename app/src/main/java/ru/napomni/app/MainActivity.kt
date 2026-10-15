@@ -9,34 +9,36 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -48,6 +50,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -55,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
+import java.time.LocalDate
 import java.time.ZoneId
 
 class MainActivity : ComponentActivity() {
@@ -70,7 +75,13 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 33 && savedInstanceState == null &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) askNotif.launch(Manifest.permission.POST_NOTIFICATIONS)
-        setContent { AppTheme { Home(resumes.intValue) } }
+        setContent {
+            AppTheme {
+                var settings by remember { mutableStateOf(false) }
+                BackHandler(enabled = settings) { settings = false }
+                if (settings) SettingsScreen { settings = false } else Home(resumes.intValue) { settings = true }
+            }
+        }
     }
 
     override fun onResume() {
@@ -79,10 +90,16 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private val WEEKDAYS_FULL = arrayOf("Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье")
+private val MONTHS_GEN = arrayOf("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря")
+
+private fun todayLine(d: LocalDate) = "${WEEKDAYS_FULL[d.dayOfWeek.value - 1]}, ${d.dayOfMonth} ${MONTHS_GEN[d.monthValue - 1]}"
+
 @Composable
-private fun Home(resumes: Int) {
+private fun Home(resumes: Int, openSettings: () -> Unit) {
     val ctx = LocalContext.current
-    val cs = MaterialTheme.colorScheme
+    val p = LocalPal.current
+    val brass = isBrass
     val zone = remember { ZoneId.systemDefault() }
     val all by Store.flow.collectAsState()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -105,162 +122,155 @@ private fun Home(resumes: Int) {
     val batteryOk = remember(resumes) {
         ctx.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(ctx.packageName)
     }
+    // В «латуни» группы — карточки с полями экрана; в «изумруде» список во всю ширину.
+    val side = if (brass) 16.dp else 20.dp
 
-    Scaffold(
-        containerColor = cs.background,
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { QuickAddActivity.open(ctx) },
-                containerColor = cs.primary, contentColor = cs.onPrimary,
-            ) { Icon(Icons.Default.Add, contentDescription = "Новое напоминание") }
-        },
-    ) { pad ->
-        LazyColumn(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp)) {
+    Box(Modifier.fillMaxSize().background(p.bg)) {
+        LazyColumn(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             item {
-                Text(
-                    "Напоминания", fontSize = 24.sp, fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                Row(Modifier.padding(start = side, end = 8.dp, top = 18.dp, bottom = 6.dp), verticalAlignment = Alignment.Top) {
+                    Column(Modifier.weight(1f)) {
+                        Overline(todayLine(today))
+                        ScreenTitle("Напоминания", Modifier.padding(top = 4.dp))
+                    }
+                    Box(
+                        Modifier.size(44.dp).clip(CircleShape).clickable(onClick = openSettings),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.Default.Settings, contentDescription = "Настройки", tint = p.textSub) }
+                }
+            }
+            val warns = buildList {
+                if (!notifOk) add(Triple("Уведомления выключены", "Без них напоминания не появятся на экране.") {
+                    ctx.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName))
+                })
+                if (!exactOk && Build.VERSION.SDK_INT >= 31) add(Triple("Нет разрешения на точное время", "Напоминания будут приходить с опозданием.") {
+                    ctx.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${ctx.packageName}")))
+                })
+                if (!fullScreenOk && active.any { it.alert == Alert.ALARM }) add(
+                    Triple("Будильник не откроется поверх блокировки", "Мелодия зазвучит, но окно с кнопками «Готово» и «Отложить» будет только в шторке.") {
+                        ctx.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${ctx.packageName}")))
+                    }
+                )
+                if (!batteryOk) add(
+                    Triple("Телефон может усыплять приложение", "Особенно Realme и Xiaomi: напоминание придёт позже или не придёт. Разрешите работу без ограничений — заряд это почти не тратит.") {
+                        ctx.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}")))
+                    }
                 )
             }
-            if (!notifOk) item {
-                Banner(
-                    "Уведомления выключены",
-                    "Без них напоминания не появятся на экране.",
-                    "Включить уведомления",
-                ) {
-                    ctx.startActivity(
-                        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName)
-                    )
-                }
-            }
-            if (!exactOk && Build.VERSION.SDK_INT >= 31) item {
-                Banner(
-                    "Нет разрешения на точное время",
-                    "Напоминания будут приходить с опозданием.",
-                    "Разрешить точное время",
-                ) {
-                    ctx.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${ctx.packageName}")))
-                }
-            }
-            if (!fullScreenOk && active.any { it.alert == Alert.ALARM }) item {
-                Banner(
-                    "Будильник не откроется поверх блокировки",
-                    "Мелодия зазвучит, но окно с кнопками «Готово» и «Отложить» появится только в шторке.",
-                    "Разрешить",
-                ) {
-                    ctx.startActivity(
-                        Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${ctx.packageName}"))
-                    )
-                }
-            }
-            if (!batteryOk) item {
-                Banner(
-                    "Телефон может усыплять приложение",
-                    "Особенно Realme и Xiaomi: напоминание придёт позже или не придёт. Разрешите работу без ограничений — заряд это почти не тратит.",
-                    "Разрешить",
-                ) {
-                    ctx.startActivity(
-                        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}"))
-                    )
-                }
-            }
+            warns.forEach { (t, s, go) -> item { Box(Modifier.padding(horizontal = side)) { WarnCard(t, s, "Разрешить", go) } } }
             if (active.isEmpty()) item {
                 Text(
                     "Будущих напоминаний нет. Нажмите «+» здесь или на виджете.",
-                    fontSize = 15.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(vertical = 16.dp),
+                    fontSize = 15.sp, color = p.textSub, modifier = Modifier.padding(horizontal = side, vertical = 20.dp),
                 )
             }
             groups.forEach { (title, list) ->
-                item(key = "g$title") { Label(title) }
-                items(list, key = { it.id }) { r ->
-                    val timeText = when {
-                        r.allDay && r.shownAt(now) == r.at -> if (title == "Позже") Fmt.whenShort(r, now) else "весь день"
-                        title == "Позже" -> Fmt.short(r.shownAt(now), now)
-                        else -> Fmt.hm(Fmt.local(r.shownAt(now), zone))
-                    }
-                    ReminderRow(r, now, past = false, timeText = timeText) {
-                        QuickAddActivity.open(ctx, r.id)
+                item(key = "g$title") { GroupHeader(title, list.size, Modifier.padding(horizontal = side)) }
+                item(key = "list$title") {
+                    RowGroup(brass, side) {
+                        list.forEachIndexed { i, r ->
+                            ReminderRow(r, now, past = false, later = title == "Позже", first = i == 0) { QuickAddActivity.open(ctx, r.id) }
+                        }
                     }
                 }
             }
             if (past.isNotEmpty()) {
                 item(key = "past") {
-                    Column(Modifier.padding(top = 8.dp)) {
-                        HorizontalDivider(color = cs.outline.copy(alpha = .3f))
-                        Row(
-                            Modifier.fillMaxWidth().clickable { showPast = !showPast }.padding(vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("Прошедшие (${past.size})", fontSize = 15.sp, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f))
-                            Icon(
-                                if (showPast) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                contentDescription = null, tint = cs.onSurfaceVariant,
-                            )
-                        }
+                    Row(
+                        Modifier.padding(horizontal = side, vertical = 14.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                            .background(if (brass) p.surfaceVar else Color.Transparent)
+                            .clickable { showPast = !showPast }.padding(horizontal = 14.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Прошедшие (${past.size})", fontSize = 15.sp, color = p.textSub, modifier = Modifier.weight(1f))
+                        Text(if (showPast) "⌃" else "›", fontSize = 18.sp, color = p.accent)
                     }
                 }
                 if (showPast) {
-                    items(past, key = { "p${it.id}" }) { r ->
-                        ReminderRow(r, now, past = true, timeText = if (r.allDay) Fmt.dayShort(Fmt.local(r.at).toLocalDate()) else Fmt.short(r.at, now)) {
-                            QuickAddActivity.open(ctx, r.id)
+                    item(key = "pastlist") {
+                        RowGroup(brass, side) {
+                            past.forEachIndexed { i, r ->
+                                ReminderRow(r, now, past = true, later = true, first = i == 0) { QuickAddActivity.open(ctx, r.id) }
+                            }
                         }
                     }
                     item(key = "clear") {
-                        TextButton(onClick = { confirmClear = true }) { Text("Очистить прошедшие") }
+                        LinkButton("Очистить прошедшие", Modifier.padding(horizontal = side - 6.dp, vertical = 6.dp)) { confirmClear = true }
                     }
                 }
             }
-            item { Spacer(Modifier.height(96.dp)) }
+            item { Spacer(Modifier.height(110.dp)) }
+        }
+        Box(Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(20.dp)) {
+            Fab { QuickAddActivity.open(ctx) }
         }
     }
 
     if (confirmClear) AlertDialog(
         onDismissRequest = { confirmClear = false },
-        title = { Text("Удалить прошедшие?") },
-        text = { Text("Из списка исчезнут ${past.size} шт. Будущие напоминания останутся.") },
+        containerColor = p.surface,
+        title = { Text("Удалить прошедшие?", fontFamily = displayFont(), color = p.text) },
+        text = { Text("Из списка исчезнут ${past.size} шт. Будущие напоминания останутся.", color = p.textSub) },
         confirmButton = {
-            TextButton(onClick = {
+            LinkButton("Удалить", color = p.error) {
                 past.forEach { Notifier.cancel(ctx, it.id) }
                 Store.remove(ctx, past.map { it.id })
                 Widget.refresh(ctx)
                 confirmClear = false
-            }) { Text("Удалить") }
+            }
         },
-        dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Отмена") } },
+        dismissButton = { LinkButton("Отмена") { confirmClear = false } },
     )
 }
 
+/** Группа строк: в «латуни» — карточка с разделителями, в «изумруде» — полоса на поверхности. */
 @Composable
-private fun Banner(title: String, text: String, action: String, onClick: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Surface(
-        color = cs.surface, shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-    ) {
-        Column(Modifier.padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 4.dp)) {
-            Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-            Text(text, fontSize = 13.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp, end = 8.dp))
-            TextButton(onClick = onClick, modifier = Modifier.align(Alignment.End)) { Text(action) }
-        }
-    }
+private fun RowGroup(brass: Boolean, side: androidx.compose.ui.unit.Dp, content: @Composable () -> Unit) {
+    val p = LocalPal.current
+    val shape = RoundedCornerShape(12.dp)
+    if (brass) Column(
+        Modifier.padding(horizontal = side).fillMaxWidth().clip(shape).background(p.surface).border(1.dp, p.outlineVar, shape)
+    ) { content() }
+    else Column(Modifier.fillMaxWidth().background(p.surface)) { content() }
 }
 
-/** Строка списка: время слева, ниже названия — сколько осталось и «заранее» (✓ — уже было). */
+/** Строка списка: время слева (две строки у «Позже»: дата — цветом выходных, если выходной), справа название и подпись. */
 @Composable
-private fun ReminderRow(r: Reminder, now: Long, past: Boolean, timeText: String, onClick: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
+private fun ReminderRow(r: Reminder, now: Long, past: Boolean, later: Boolean, first: Boolean, onClick: () -> Unit) {
+    val p = LocalPal.current
+    val brass = isBrass
+    val shown = r.shownAt(now)
+    val t = Fmt.local(shown)
+    val d = t.toLocalDate()
+    val allDayHere = r.allDay && shown == r.at
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        HorizontalDivider(color = cs.outline.copy(alpha = .2f))
-        Row(Modifier.padding(vertical = 10.dp)) {
-            Text(timeText, fontSize = 14.sp, color = cs.onSurfaceVariant, modifier = Modifier.width(92.dp))
-            Column(Modifier.weight(1f)) {
+        if (!first) Box(
+            Modifier.padding(start = if (brass) 0.dp else 20.dp).fillMaxWidth().height(1.dp).background(p.outlineVar)
+        )
+        Row(
+            Modifier.heightIn(min = 64.dp).padding(horizontal = if (brass) 14.dp else 20.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.width(78.dp)) {
+                if (later) Text(
+                    "${Fmt.WEEKDAYS[d.dayOfWeek.value - 1]} ${Fmt.dm(d)}", fontSize = 12.5.sp,
+                    color = if (isWeekend(d)) p.weekend else p.textSub, maxLines = 1,
+                )
+                if (allDayHere) Text("весь день", fontSize = 13.sp, color = p.textSub)
+                else Text(
+                    Fmt.hm(t), fontFamily = displayFont(), fontSize = if (brass) 18.sp else 17.sp,
+                    fontWeight = if (brass) FontWeight.Normal else FontWeight.Medium,
+                    color = if (past) p.textSub else p.text,
+                )
+            }
+            Column(Modifier.weight(1f).padding(start = 8.dp)) {
                 Text(
-                    r.title, fontSize = 16.sp,
-                    color = if (past) cs.onSurfaceVariant else cs.onSurface,
+                    r.title, fontSize = 15.5.sp, fontWeight = FontWeight.Medium,
+                    color = if (past) p.textSub else p.text,
                     textDecoration = if (r.done) TextDecoration.LineThrough else null,
                 )
                 val sub = subtitle(r, now, past)
-                if (sub.isNotEmpty()) Text(sub, fontSize = 13.sp, color = cs.onSurfaceVariant)
+                if (sub.isNotEmpty()) Text(sub, fontSize = 13.sp, color = p.textSub, modifier = Modifier.padding(top = 2.dp))
             }
         }
     }
@@ -279,4 +289,69 @@ private fun subtitle(r: Reminder, now: Long, past: Boolean): String {
         parts += "заранее: " + early.joinToString(", ") { if (r.shown(it)) "${Fmt.early(it)} ✓" else Fmt.early(it) }
     }
     return parts.joinToString(" · ")
+}
+
+/** Настройки: выбор оформления. Смена сразу перерисовывает приложение и виджет. */
+@Composable
+private fun SettingsScreen(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    val p = LocalPal.current
+    val look by Prefs.lookFlow(ctx).collectAsState()
+    Column(Modifier.fillMaxSize().background(p.bg).statusBarsPadding().navigationBarsPadding().padding(horizontal = 16.dp)) {
+        Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(44.dp).clip(CircleShape).clickable(onClick = onBack), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.ArrowBack, contentDescription = "Назад", tint = p.text)
+            }
+        }
+        ScreenTitle("Настройки", Modifier.padding(top = 4.dp, start = 4.dp))
+        GroupHeader("Оформление", Look.entries.size)
+        Look.entries.forEach { l -> LookCard(l, l == look) {
+            Prefs.setLook(ctx, l)
+            Widget.refresh(ctx)
+        } }
+        Spacer(Modifier.weight(1f))
+        Text(
+            "Шрифт PT Serif — ParaType, лицензия SIL Open Font License 1.1.",
+            fontSize = 12.sp, color = p.textSub, modifier = Modifier.padding(16.dp),
+        )
+    }
+}
+
+/** Карточка варианта оформления: образец цветов и цифр в своём шрифте, название, идея, радио. */
+@Composable
+private fun LookCard(l: Look, selected: Boolean, onClick: () -> Unit) {
+    val p = LocalPal.current
+    val own = palette(l, p.dark)
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        Modifier.padding(vertical = 6.dp).fillMaxWidth().clip(shape).background(p.surface)
+            .border(if (selected) 1.5.dp else 1.dp, if (selected) p.accent else p.outlineVar, shape)
+            .clickable(onClick = onClick).padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Образец: фон варианта, его основной цвет и акцент, «19:00» его шрифтом.
+        Box(
+            Modifier.size(76.dp, 64.dp).clip(RoundedCornerShape(10.dp)).background(own.bg).border(1.dp, own.outlineVar, RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    "19:00", fontFamily = if (l == Look.BRASS) PtSerif else androidx.compose.ui.text.font.FontFamily.Default,
+                    fontSize = 18.sp, fontWeight = if (l == Look.BRASS) FontWeight.Normal else FontWeight.Light, color = own.text,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 4.dp)) {
+                    listOf(own.primary, own.accent, own.weekend).forEach {
+                        Box(Modifier.size(10.dp).clip(CircleShape).background(it))
+                    }
+                }
+            }
+        }
+        Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+            Text(l.title, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = p.text)
+            Text(l.idea, fontSize = 13.sp, color = p.textSub, modifier = Modifier.padding(top = 2.dp))
+        }
+        Box(Modifier.size(20.dp).clip(CircleShape).border(1.5.dp, p.accent, CircleShape), contentAlignment = Alignment.Center) {
+            if (selected) Box(Modifier.size(10.dp).clip(CircleShape).background(p.accent))
+        }
+    }
 }

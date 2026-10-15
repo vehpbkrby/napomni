@@ -1,10 +1,11 @@
 package ru.napomni.app
 
 import android.Manifest
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.Ringtone
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
@@ -17,6 +18,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -28,54 +31,68 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.YearMonth
@@ -115,13 +132,27 @@ class QuickAddActivity : ComponentActivity() {
     }
 }
 
+/** Блоки мастера по порядку заполнения: после выбора в одном подсвечивается следующий. */
+private enum class B { TEXT, QUICK, DAY, TIME, GO1, DAYS, DAYTIME, HOURS, HOW, GO2 }
+
+/** Время события по умолчанию, когда выбран день: сегодня — следующий час, иначе утро. */
+private fun defaultHour(d: LocalDate, now: LocalDateTime): Int =
+    if (d == now.toLocalDate()) minOf(now.hour + 1, 23) else DEFAULT_DAY_TIME / 60
+
+private fun hm(h: Int, m: Int) = "$h:%02d".format(m)
+
+/** Прокрутка к следующему блоку — кривая и длительность от дизайнера. */
+private val SCROLL_SPEC = tween<Float>(420, easing = CubicBezierEasing(0.2f, 0f, 0f, 1f))
+
 @Composable
 private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: () -> Unit) {
     val ctx = LocalContext.current
-    val cs = MaterialTheme.colorScheme
+    val p = LocalPal.current
+    val brass = isBrass
     val zone = remember { ZoneId.systemDefault() }
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
+    val density = LocalDensity.current
     val fr = remember { FocusRequester() }
 
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -139,7 +170,40 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
     val timed = edit != null && !edit.allDay
 
     var step by remember { mutableIntStateOf(1) }
+    // Новое — начинаем с текста; правка — ничего не подсвечиваем, всё уже заполнено.
+    var active by remember { mutableStateOf(if (edit == null) B.TEXT else null) }
+    val scroll = rememberScrollState()
+    val scope = rememberCoroutineScope()
+    /** Верх и высота каждого блока внутри прокручиваемой колонки. */
+    val pos = remember { mutableStateMapOf<B, Pair<Int, Int>>() }
+
+    /**
+     * Подсветить блок и довести до него лист: наименьший сдвиг, чтобы блок был виден целиком с полем 16 dp;
+     * если не помещается — его верх на 16 dp от края. Пока палец на экране — не дёргаем.
+     */
+    fun go(b: B?) {
+        active = b
+        if (b == null) return
+        scope.launch {
+            delay(140)
+            if (scroll.isScrollInProgress) return@launch
+            val (top, h) = pos[b] ?: return@launch
+            val vp = scroll.viewportSize
+            val margin = with(density) { 16.dp.roundToPx() }
+            val cur = scroll.value
+            val target = when {
+                h + 2 * margin > vp || top < cur + margin -> top - margin
+                top + h > cur + vp - margin -> top + h - vp + margin
+                else -> return@launch
+            }.coerceIn(0, scroll.maxValue)
+            scroll.animateScrollTo(target, SCROLL_SPEC)
+        }
+    }
+
+    fun Modifier.at(b: B) = onGloballyPositioned { pos[b] = it.positionInParent().y.toInt() to it.size.height }
+
     var text by remember { mutableStateOf(TextFieldValue(edit?.title ?: "", TextRange(edit?.title?.length ?: 0))) }
+    var focused by remember { mutableStateOf(false) }
     var inMin by remember {
         mutableStateOf(
             when (preset) {
@@ -161,7 +225,15 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
     }
     var showCal by remember { mutableStateOf(preset == QuickAddActivity.PRESET_DATE || (date != null && date !in week)) }
     var allDay by remember { mutableStateOf(edit?.allDay ?: false) }
-    var hour by remember { mutableStateOf(if (timed) editAt?.hour else null) }
+    var hour by remember {
+        mutableStateOf(
+            when {
+                timed -> editAt?.hour
+                date != null && edit == null -> defaultHour(date!!, LocalDateTime.now(zone))
+                else -> null
+            }
+        )
+    }
     var minute by remember { mutableIntStateOf(if (timed) editAt?.minute ?: 0 else 0) }
     var month by remember { mutableStateOf(YearMonth.from(date ?: start)) }
 
@@ -177,17 +249,6 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
     var flash by remember { mutableStateOf(edit?.flash ?: false) }
     var melodyMenu by remember { mutableStateOf(false) }
     val melodyName = remember(melody) { Melody.name(ctx, melody) }
-    val pickTone = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
-        val uri: Uri? = if (Build.VERSION.SDK_INT >= 33) {
-            res.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI, Uri::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            res.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
-        }
-        if (res.resultCode == Activity.RESULT_OK && uri != null) {
-            melody = if (uri == Settings.System.DEFAULT_ALARM_ALERT_URI) null else uri.toString()
-        }
-    }
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             // Право читать файл и после перезагрузки — иначе к сроку мелодия не откроется.
@@ -242,14 +303,14 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
     fun onText(v: TextFieldValue) {
         text = v
         error = null
-        val p = TimeParser.parse(v.text, LocalDateTime.now(zone))
-        parsed = p
-        val key = p.copy(spans = emptyList(), title = "")
+        val pr = TimeParser.parse(v.text, LocalDateTime.now(zone))
+        parsed = pr
+        val key = pr.copy(spans = emptyList(), title = "")
         if (key == lastKey) return
         lastKey = key
         // Новое понятое время из текста выставляет выбор; ручной выбор держится, пока текст не скажет другое.
-        val m = p.minutes
-        val d = p.date
+        val m = pr.minutes
+        val d = pr.date
         if (m != null) {
             inMin = m
         } else if (d != null) {
@@ -257,7 +318,7 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
             date = d
             month = YearMonth.from(d)
             showCal = d !in week
-            p.time?.let {
+            pr.time?.let {
                 hour = it.hour
                 minute = it.minute
                 allDay = false
@@ -307,6 +368,18 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         return true
     }
 
+    fun pickDay(d: LocalDate) {
+        date = d
+        inMin = null
+        month = YearMonth.from(d)
+        error = null
+        if (hour == null && !allDay) {
+            hour = defaultHour(d, LocalDateTime.now(zone))
+            minute = 0
+        }
+        go(B.TIME)
+    }
+
     fun next() {
         val t = System.currentTimeMillis()
         stepOneError(t)?.let {
@@ -318,12 +391,18 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         if (inMin == null && allDay && days.isEmpty()) days = setOf(0)
         focus.clearFocus()
         step = 2
+        scope.launch { scroll.scrollTo(0) }
+        go(if (inMin != null) B.HOW else B.DAYS)
     }
 
-    BackHandler(enabled = step == 2) {
+    fun back() {
         step = 1
         error = null
+        scope.launch { scroll.scrollTo(0) }
+        go(B.GO1)
     }
+
+    BackHandler(enabled = step == 2) { back() }
 
     LaunchedEffect(Unit) {
         if (edit == null) {
@@ -333,10 +412,19 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         }
     }
 
+    fun state(b: B, filled: Boolean) = when {
+        active == b -> BlockState.ACTIVE
+        filled -> BlockState.DONE
+        else -> BlockState.IDLE
+    }
+
+    // В «латуни» блоки — карточки на бумаге с полями листа; в «изумруде» секции во всю ширину.
+    val side = if (brass) 4.dp else 20.dp
+
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = .4f))
+            .background(Color.Black.copy(alpha = .45f))
             .clickable(remember { MutableInteractionSource() }, null, onClick = onClose)
             .statusBarsPadding(),
         contentAlignment = Alignment.BottomCenter,
@@ -346,287 +434,434 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                 .fillMaxWidth()
                 .imePadding()
                 .clickable(remember { MutableInteractionSource() }, null) {},
-            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-            color = cs.surface,
+            shape = RoundedCornerShape(topStart = if (brass) 22.dp else 18.dp, topEnd = if (brass) 22.dp else 18.dp),
+            color = if (brass) p.bg else p.surface,
         ) {
-            key(step) {
-                Column(
-                    Modifier
-                        .verticalScroll(rememberScrollState())
-                        .navigationBarsPadding()
-                        .padding(horizontal = 16.dp, vertical = 14.dp)
-                ) {
-                    Text("Шаг $step из 2", fontSize = 12.sp, color = cs.onSurfaceVariant)
-                    Text(
-                        if (step == 1) "Когда событие" else "Когда напомнить",
-                        fontSize = 19.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(bottom = 10.dp),
-                    )
-                    if (step == 1) {
+            Column(
+                Modifier
+                    .verticalScroll(scroll)
+                    .navigationBarsPadding()
+                    .padding(horizontal = if (brass) 12.dp else 0.dp)
+                    .padding(bottom = 14.dp)
+            ) {
+                SheetHeader(
+                    step, if (step == 1) "Когда событие" else "Когда напомнить", onClose,
+                    Modifier.padding(horizontal = side),
+                )
+                if (step == 1) {
+                    // --- Что напомнить
+                    StepBlock(
+                        if (brass) "Что напомнить" else null, state(B.TEXT, text.text.isNotBlank()),
+                        hint = "что и когда", modifier = Modifier.at(B.TEXT),
+                    ) {
+                        val field = @Composable { inner: @Composable () -> Unit ->
+                            Box {
+                                if (text.text.isEmpty()) Text(
+                                    "Забрать посылку завтра в 10", fontFamily = displayFont(),
+                                    fontSize = if (brass) 19.sp else 17.sp, color = p.textSub.copy(alpha = .6f),
+                                )
+                                inner()
+                            }
+                        }
                         BasicTextField(
                             value = text,
                             onValueChange = ::onText,
-                            textStyle = TextStyle(fontSize = 18.sp, color = cs.onSurface),
-                            cursorBrush = SolidColor(cs.primary),
-                            visualTransformation = Highlight(parsed.spans, cs.primary),
+                            textStyle = TextStyle(
+                                fontFamily = displayFont(), fontSize = if (brass) 19.sp else 17.sp,
+                                lineHeight = if (brass) 28.sp else 24.sp, color = p.text,
+                            ),
+                            cursorBrush = SolidColor(p.accent),
+                            visualTransformation = Highlight(parsed.spans, p.hlBg, p.hlText),
                             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
                             keyboardActions = KeyboardActions(onDone = {
                                 val t = System.currentTimeMillis()
                                 when {
                                     inMin != null -> if (!save()) focus.clearFocus()
                                     stepOneError(t) == null -> next()
-                                    else -> focus.clearFocus()
+                                    else -> {
+                                        focus.clearFocus()
+                                        go(if (date == null) B.DAY else B.TIME)
+                                    }
                                 }
                             }),
-                            modifier = Modifier.fillMaxWidth().focusRequester(fr),
+                            modifier = Modifier.fillMaxWidth().focusRequester(fr).onFocusChanged { focused = it.isFocused },
                             decorationBox = { inner ->
-                                Column {
-                                    Box {
-                                        if (text.text.isEmpty()) Text("Что напомнить", fontSize = 18.sp, color = cs.onSurfaceVariant)
-                                        inner()
-                                    }
+                                if (brass) Column {
+                                    field(inner)
                                     Spacer(Modifier.height(8.dp))
-                                    HorizontalDivider(thickness = 1.5.dp, color = cs.primary)
+                                    Box(
+                                        Modifier.fillMaxWidth().height(if (focused) 1.5.dp else 1.dp)
+                                            .background(if (focused) p.primary else p.outline)
+                                    )
+                                } else Column(
+                                    Modifier.clip(RoundedCornerShape(10.dp)).background(p.surfaceVar)
+                                        .padding(horizontal = 12.dp, vertical = 9.dp)
+                                ) {
+                                    Text("Что напомнить", fontSize = 12.sp, color = p.textSub)
+                                    field(inner)
                                 }
                             },
                         )
                         if (parsed.found) Text(
-                            "время понято из текста", fontSize = 12.sp, color = cs.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 4.dp),
+                            "время понято из текста", fontSize = 12.sp, color = p.accentText,
+                            modifier = Modifier.padding(top = 6.dp),
                         )
+                    }
 
-                        Label("Через")
+                    // --- Через
+                    StepBlock(
+                        "Через", state(B.QUICK, inMin != null),
+                        value = inMin?.let { "через ${Fmt.dur(it)}" }, modifier = Modifier.at(B.QUICK),
+                    ) {
                         Chips {
                             IN_OPTIONS.forEach { m ->
                                 Chip(Fmt.dur(m), selected = inMin == m) {
                                     inMin = if (inMin == m) null else m
                                     error = null
+                                    go(if (inMin != null) B.GO1 else B.DAY)
                                 }
                             }
                             // «через 45 минут» из текста — своей кнопкой.
                             inMin?.takeIf { it !in IN_OPTIONS }?.let { m -> Chip(Fmt.dur(m), selected = true) { inMin = null } }
                         }
+                    }
 
-                        Label("День")
+                    // --- День
+                    val dayChosen = inMin == null && date != null
+                    StepBlock(
+                        "День", state(B.DAY, dayChosen),
+                        value = date?.takeIf { dayChosen }?.let { Fmt.dayShort(it, today) }, hint = "выберите день",
+                        modifier = Modifier.at(B.DAY),
+                    ) {
                         WeekGrid(week, if (inMin == null) date else null, today) { d ->
-                            date = d
-                            inMin = null
                             showCal = false
-                            month = YearMonth.from(d)
-                            error = null
+                            pickDay(d)
                         }
                         val other = date?.takeIf { inMin == null && it !in week }
-                        OptionRow("Другая дата", other?.let { Fmt.dayShort(it, today) } ?: if (showCal) "скрыть" else "календарь") {
-                            showCal = !showCal
-                            focus.clearFocus()
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                other?.let { "Другая дата: ${Fmt.dayShort(it, today)}" } ?: "",
+                                fontSize = 14.sp, color = p.text, modifier = Modifier.weight(1f),
+                            )
+                            LinkButton(if (showCal) "Скрыть календарь" else "Другая дата ›") {
+                                showCal = !showCal
+                                focus.clearFocus()
+                                if (showCal) go(B.DAY)
+                            }
                         }
                         if (showCal) MonthCalendar(month, { month = it }, if (inMin == null) date else null, today, marked) { d ->
-                            date = d
-                            inMin = null
-                            error = null
+                            pickDay(d)
                         }
+                    }
 
-                        if (inMin == null) {
-                            Label("Время события")
-                            val nowLocal = Fmt.local(now, zone)
-                            NumberGrid(
-                                (0..23).toList(), 8, if (allDay) null else hour, { "$it" },
-                                { h -> date != today || h >= nowLocal.hour },
-                            ) {
-                                hour = it
-                                allDay = false
-                                error = null
-                            }
-                            Spacer(Modifier.height(4.dp))
-                            NumberGrid(
-                                (0..55 step 5).toList(), 6,
-                                if (allDay || hour == null) null else minute.takeIf { it % 5 == 0 }, { ":%02d".format(it) }, { true },
-                            ) {
-                                minute = it
-                                allDay = false
-                                error = null
-                            }
-                            Spacer(Modifier.height(6.dp))
+                    // --- Время события
+                    if (inMin == null) {
+                        val h = hour
+                        StepBlock(
+                            "Время события", state(B.TIME, dayChosen && (allDay || h != null)),
+                            value = if (allDay) "весь день" else h?.let { hm(it, minute) }, hint = "выберите время",
+                            modifier = Modifier.at(B.TIME),
+                        ) {
+                            TimeWheels(
+                                hour = h ?: DEFAULT_DAY_TIME / 60,
+                                minute = minute,
+                                dimmed = allDay || h == null,
+                                onHour = {
+                                    // Час сменили — остаёмся: обычно сразу докручивают минуты.
+                                    hour = it
+                                    allDay = false
+                                    error = null
+                                },
+                                onMinute = {
+                                    if (hour == null) hour = DEFAULT_DAY_TIME / 60
+                                    minute = it
+                                    allDay = false
+                                    error = null
+                                    go(B.GO1)
+                                },
+                            )
+                            Spacer(Modifier.height(10.dp))
                             Chips {
                                 Chip("Без времени (весь день)", selected = allDay) {
                                     allDay = !allDay
                                     error = null
+                                    if (allDay) go(B.GO1)
                                 }
                             }
                         }
+                    }
 
+                    // --- Итог и кнопки
+                    Column(Modifier.padding(horizontal = side).at(B.GO1)) {
                         val problem = error ?: stepOneError(now)
                         val m = inMin
-                        Result(
-                            when {
-                                m != null -> "Сработает: ${Fmt.long(now + m * MINUTE, now)}"
-                                problem != null -> problem
-                                else -> "Событие: ${draft(now)?.let { Fmt.event(it, now) }}"
-                            },
+                        ResultLine(
+                            AnnotatedString(
+                                when {
+                                    m != null -> "Сработает: ${Fmt.long(now + m * MINUTE, now)}"
+                                    problem != null -> problem
+                                    else -> "Событие: ${draft(now)?.let { Fmt.event(it, now) }}"
+                                }
+                            ),
                             bad = m == null && (error != null || problem == "Это время уже прошло" || problem == "Этот день уже прошёл"),
                         )
+                        Spacer(Modifier.height(8.dp))
                         if (inMin != null) {
-                            Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedButton(
-                                    onClick = { next() }, shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.weight(1f).height(50.dp),
-                                ) { Text("Настроить ›") }
-                                Button(
-                                    onClick = { save() }, shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.weight(2f).height(50.dp),
-                                ) { Text(if (edit != null) "Сохранить" else "Напомнить", fontSize = 16.sp) }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                LinkButton("Настроить ›") { next() }
+                                MainButton(
+                                    if (edit != null) "Сохранить" else "Напомнить", Modifier.weight(1f),
+                                    ring = active == B.GO1,
+                                ) { save() }
                             }
                         } else {
-                            Button(
-                                onClick = { next() }, shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth().padding(top = 14.dp).height(50.dp),
-                            ) { Text("Далее ›", fontSize = 16.sp) }
+                            MainButton("Далее ›", Modifier.fillMaxWidth(), ring = active == B.GO1 && problem == null) { next() }
                         }
-                    } else {
-                        val r0 = draft(now)
-                        Surface(
-                            color = cs.surfaceVariant, shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth().clickable { step = 1 },
+                    }
+                } else {
+                    // --- Сводка шага 1
+                    val r0 = draft(now)
+                    Box(Modifier.padding(horizontal = side, vertical = 6.dp)) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (brass) p.primary else p.surfaceVar)
+                                .clickable { back() }
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
                                 Text(
-                                    "${parsed.title.ifBlank { "Напоминание" }} · ${r0?.let { Fmt.event(it, now) } ?: ""}",
-                                    fontSize = 14.sp, modifier = Modifier.weight(1f),
+                                    parsed.title.ifBlank { "Напоминание" }, fontFamily = displayFont(), fontSize = 16.sp,
+                                    fontWeight = if (brass) FontWeight.Normal else FontWeight.Medium,
+                                    color = if (brass) p.onPrimary else p.text, maxLines = 2,
                                 )
-                                Text("‹ изменить", fontSize = 13.sp, color = cs.primary)
+                                Text(
+                                    r0?.let { if (inMin != null) Fmt.long(it.at, now) else Fmt.event(it, now) } ?: "",
+                                    fontSize = 13.sp, color = if (brass) p.onPrimarySub else p.textSub,
+                                )
                             }
+                            Text("‹ изменить", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = if (brass) p.linkOnPrimary else p.accentText)
                         }
+                    }
 
-                        if (inMin == null && r0 != null) {
-                            Label("В какие дни (можно несколько)")
+                    if (inMin == null && r0 != null) {
+                        StepBlock(
+                            "В какие дни", state(B.DAYS, days.isNotEmpty()),
+                            value = if (days.isEmpty()) null else "выбрано ${days.size}", hint = "можно несколько",
+                            modifier = Modifier.at(B.DAYS),
+                        ) {
                             Chips {
                                 DAY_OPTIONS.forEach { d ->
                                     val ok = r0.dayFits(d) && r0.dayAt(d) > now
-                                    Chip(Fmt.dayLabel(d), selected = ok && d in days, enabled = ok) {
+                                    Chip(Fmt.dayLabel(d), selected = ok && d in days, enabled = ok, check = true) {
                                         days = if (d in days) days - d else days + d
                                         error = null
+                                        go(B.DAYTIME)
                                     }
                                 }
                             }
                             if (DAY_OPTIONS.any { !(r0.dayFits(it) && r0.dayAt(it) > now) }) Text(
                                 "бледные — уже прошли или позже самого события",
-                                fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp),
+                                fontSize = 12.sp, color = p.textSub, modifier = Modifier.padding(top = 6.dp),
                             )
-                            Label("Во сколько")
-                            NumberGrid((0..23).toList(), 8, dayHour, { "$it" }, { true }) { dayHour = it }
-                            Spacer(Modifier.height(4.dp))
-                            NumberGrid((0..55 step 5).toList(), 6, dayMinute.takeIf { it % 5 == 0 }, { ":%02d".format(it) }, { true }) {
-                                dayMinute = it
-                            }
-                            if (!allDay) {
-                                Label("И перед самим событием")
-                                Chips {
-                                    BEFORE_OPTIONS.forEach { b ->
-                                        val ok = r0.at - b * MINUTE > now
-                                        Chip(Fmt.before(b), selected = ok && b in before, enabled = ok) {
-                                            before = if (b in before) before - b else before + b
-                                        }
+                        }
+                        StepBlock(
+                            "Во сколько", state(B.DAYTIME, true), value = hm(dayHour, dayMinute), hint = "время напоминаний",
+                            modifier = Modifier.at(B.DAYTIME),
+                        ) {
+                            TimeWheels(
+                                hour = dayHour, minute = dayMinute, rows = 3,
+                                onHour = { dayHour = it },
+                                onMinute = {
+                                    dayMinute = it
+                                    go(if (allDay) B.HOW else B.HOURS)
+                                },
+                            )
+                        }
+                        if (!allDay) StepBlock(
+                            "Перед самим событием", state(B.HOURS, before.isNotEmpty()),
+                            value = before.sorted().joinToString(", ") { Fmt.dur(it) }.ifEmpty { null }, hint = "по желанию",
+                            modifier = Modifier.at(B.HOURS),
+                        ) {
+                            Chips {
+                                BEFORE_OPTIONS.forEach { b ->
+                                    val ok = r0.at - b * MINUTE > now
+                                    Chip(Fmt.before(b), selected = ok && b in before, enabled = ok, check = true) {
+                                        before = if (b in before) before - b else before + b
+                                        go(B.HOW)
                                     }
                                 }
                             }
-                            val plan = r0.triggers().filter { it.time > now }
-                            Result(
-                                if (plan.isEmpty()) "Ни одного напоминания — выберите день" else "Напомню: " +
-                                    plan.joinToString(" · ") { Fmt.compact(it.time, now) + if (it.kind == Kind.EVENT) " (событие)" else "" },
+                        }
+                        val plan = r0.triggers().filter { it.time > now }
+                        Box(Modifier.padding(horizontal = side)) {
+                            ResultLine(
+                                if (plan.isEmpty()) AnnotatedString("Ни одного напоминания — выберите день") else buildAnnotatedString {
+                                    append("Напомню: ")
+                                    plan.forEachIndexed { i, t ->
+                                        if (i > 0) append(" · ")
+                                        val s = Fmt.compact(t.time, now) + if (t.kind == Kind.EVENT) " (событие)" else ""
+                                        // Выходные — цветом и здесь.
+                                        if (isWeekend(Fmt.local(t.time, zone).toLocalDate())) withStyle(SpanStyle(color = p.weekend)) { append(s) }
+                                        else append(s)
+                                    }
+                                },
                                 bad = plan.isEmpty(),
                             )
                         }
+                    }
 
-                        Label("Как напомнить")
-                        Chips {
-                            Alert.entries.forEach { a -> Chip(a.label, selected = alert == a) { alert = a } }
+                    StepBlock(
+                        "Как напомнить", state(B.HOW, true), value = alert.label, hint = "способ",
+                        modifier = Modifier.at(B.HOW),
+                    ) {
+                        Segmented(Alert.entries.map { it.label }, alert.ordinal) {
+                            alert = Alert.entries[it]
+                            go(B.GO2)
                         }
                         Spacer(Modifier.height(4.dp))
                         if (alert == Alert.ALARM) {
-                            Box {
-                                OptionRow("Мелодия", melodyName) { melodyMenu = true }
-                                DropdownMenu(expanded = melodyMenu, onDismissRequest = { melodyMenu = false }) {
-                                    DropdownMenuItem(text = { Text("Звуки телефона") }, onClick = {
-                                        melodyMenu = false
-                                        pickTone.launch(
-                                            Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
-                                                .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
-                                                .putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Мелодия будильника")
-                                                .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
-                                                .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
-                                                .putExtra(
-                                                    RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
-                                                    melody?.let { Uri.parse(it) } ?: Settings.System.DEFAULT_ALARM_ALERT_URI,
-                                                )
-                                        )
-                                    })
-                                    DropdownMenuItem(text = { Text("Свой файл…") }, onClick = {
-                                        melodyMenu = false
-                                        pickFile.launch(arrayOf("audio/*"))
-                                    })
-                                }
-                            }
+                            OptionRow("Мелодия", melodyName) { melodyMenu = true }
                             if (!Notifier.fullScreenAllowed(ctx)) Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     "Без разрешения окно будильника не появится поверх блокировки — будет только мелодия и уведомление.",
-                                    fontSize = 12.sp, color = cs.error, modifier = Modifier.weight(1f),
+                                    fontSize = 12.sp, color = p.textSub, modifier = Modifier.weight(1f),
                                 )
-                                TextButton(onClick = {
+                                LinkButton("Разрешить") {
                                     ctx.startActivity(
                                         Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${ctx.packageName}"))
                                     )
-                                }) { Text("Разрешить") }
+                                }
                             }
                         }
-                        if (alert != Alert.SILENT) Toggle("Повторять каждые $NAG_MIN мин, пока не отвечу", repeat) { repeat = it }
-                        if (alert == Alert.SOUND || alert == Alert.ALARM) Toggle("Читать вслух", speak) { speak = it }
-                        if (alert != Alert.SILENT) Toggle("Вспышка", flash) { flash = it }
+                        if (alert != Alert.SILENT) ToggleRow("Повторять каждые $NAG_MIN мин, пока не отвечу", repeat) { repeat = it }
+                        if (alert == Alert.SOUND || alert == Alert.ALARM) ToggleRow("Читать вслух", speak) { speak = it }
+                        if (alert != Alert.SILENT) ToggleRow("Вспышка", flash) { flash = it }
                         if (alert == Alert.ALARM && inMin == null) Text(
                             "заранее придёт обычным уведомлением со звуком",
-                            fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp),
+                            fontSize = 12.sp, color = p.textSub, modifier = Modifier.padding(top = 2.dp),
                         )
-                        error?.let { Text(it, fontSize = 14.sp, color = cs.error, modifier = Modifier.padding(top = 8.dp)) }
+                    }
 
-                        Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(
-                                onClick = {
-                                    step = 1
-                                    error = null
-                                },
-                                shape = RoundedCornerShape(12.dp), modifier = Modifier.weight(1f).height(50.dp),
-                            ) { Text("‹ Назад") }
-                            Button(
-                                onClick = { save() }, shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.weight(2f).height(50.dp),
-                            ) { Text(if (edit != null) "Сохранить" else "Напомнить", fontSize = 16.sp) }
+                    Column(Modifier.padding(horizontal = side).at(B.GO2)) {
+                        error?.let { Text(it, fontSize = 14.sp, color = p.error, modifier = Modifier.padding(top = 8.dp)) }
+                        Spacer(Modifier.height(8.dp))
+                        Row {
+                            SecondButton("‹ Назад", Modifier.weight(1f)) { back() }
+                            MainButton(
+                                if (edit != null) "Сохранить" else "Напомнить", Modifier.weight(2f), ring = active == B.GO2,
+                            ) { save() }
                         }
-                        if (edit != null) TextButton(
-                            onClick = {
-                                Store.remove(ctx, listOf(edit.id))
-                                Notifier.cancel(ctx, edit.id)
-                                AlarmService.stop(ctx, edit.id)
-                                Scheduler.run(ctx)
-                                onClose()
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("Удалить напоминание", color = cs.error) }
+                        if (edit != null) LinkButton("Удалить напоминание", Modifier.fillMaxWidth(), color = p.error) {
+                            Store.remove(ctx, listOf(edit.id))
+                            Notifier.cancel(ctx, edit.id)
+                            AlarmService.stop(ctx, edit.id)
+                            Scheduler.run(ctx)
+                            onClose()
+                        }
                     }
                 }
             }
         }
     }
+
+    if (melodyMenu) MelodyPicker(
+        current = melody,
+        onPick = { melody = it },
+        onFile = {
+            melodyMenu = false
+            pickFile.launch(arrayOf("audio/*"))
+        },
+        onClose = { melodyMenu = false },
+    )
 }
 
-/** Итоговая строка шага: что получится, или что мешает. */
+/**
+ * Меню мелодии: свой лист со списком мелодий будильника телефона, радио-отметкой и пробой на 3 с.
+ * «Свой файл…» — выбор аудиофайла из памяти телефона.
+ */
 @Composable
-private fun Result(text: String, bad: Boolean) {
-    val cs = MaterialTheme.colorScheme
-    Surface(
-        color = cs.surfaceVariant, shape = RoundedCornerShape(8.dp),
-        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-    ) {
-        Text(
-            text, fontSize = 14.sp, color = if (bad) cs.error else cs.onSurface,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-        )
+private fun MelodyPicker(current: String?, onPick: (String?) -> Unit, onFile: () -> Unit, onClose: () -> Unit) {
+    val ctx = LocalContext.current
+    val p = LocalPal.current
+    var tones by remember { mutableStateOf<List<Melody.Tone>>(emptyList()) }
+    var playing by remember { mutableStateOf<String?>(null) }
+    var ringtone by remember { mutableStateOf<Ringtone?>(null) }
+    LaunchedEffect(Unit) {
+        val list = withContext(Dispatchers.IO) { Melody.alarmTones(ctx) }
+        tones = listOf(Melody.Tone(null, "Будильник телефона")) + list +
+            listOfNotNull(current?.takeIf { c -> list.none { it.uri == c } }?.let { Melody.Tone(it, Melody.name(ctx, it)) })
+    }
+    fun stop() {
+        ringtone?.stop()
+        ringtone = null
+        playing = null
+    }
+    LaunchedEffect(playing) {
+        if (playing != null) {
+            delay(3_000)
+            stop()
+        }
+    }
+    DisposableEffect(Unit) { onDispose { ringtone?.stop() } }
+
+    Dialog(onDismissRequest = {
+        stop()
+        onClose()
+    }) {
+        Surface(shape = RoundedCornerShape(20.dp), color = p.surface) {
+            Column(Modifier.padding(vertical = 16.dp)) {
+                Text(
+                    "Мелодия", fontFamily = displayFont(), fontSize = 20.sp,
+                    fontWeight = if (isBrass) FontWeight.Normal else FontWeight.Medium, color = p.text,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                )
+                LazyColumn(Modifier.heightIn(max = 380.dp).padding(top = 8.dp)) {
+                    items(tones, key = { it.uri ?: "default" }) { t ->
+                        val sel = t.uri == current
+                        val key = t.uri ?: "default"
+                        Row(
+                            Modifier.fillMaxWidth().heightIn(min = 52.dp)
+                                .background(if (sel) (if (isBrass) p.surfaceVar else p.activeBg) else Color.Transparent)
+                                .clickable { onPick(t.uri) }
+                                .padding(horizontal = 20.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                Modifier.size(18.dp).clip(CircleShape).border(1.5.dp, p.accent, CircleShape),
+                                contentAlignment = Alignment.Center,
+                            ) { if (sel) Box(Modifier.size(8.dp).clip(CircleShape).background(p.accent)) }
+                            Text(t.name, fontSize = 15.sp, color = p.text, maxLines = 1, modifier = Modifier.weight(1f).padding(horizontal = 14.dp))
+                            LinkButton(if (playing == key) "■" else "▶") {
+                                if (playing == key) stop() else {
+                                    stop()
+                                    val uri = t.uri?.let { Uri.parse(it) } ?: Settings.System.DEFAULT_ALARM_ALERT_URI
+                                    ringtone = RingtoneManager.getRingtone(ctx, uri)?.apply {
+                                        audioAttributes = AudioAttributes.Builder()
+                                            .setUsage(AudioAttributes.USAGE_ALARM)
+                                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
+                                        play()
+                                    }
+                                    playing = key
+                                }
+                            }
+                        }
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable {
+                        stop()
+                        onFile()
+                    }.padding(horizontal = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) { Text("Свой файл…", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = p.accentText) }
+                MainButton("Готово", Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                    stop()
+                    onClose()
+                }
+            }
+        }
     }
 }
