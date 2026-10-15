@@ -12,6 +12,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import java.time.temporal.ChronoUnit
 
 /**
  * Звук и вибрацию уведомления Android задаёт каналом, и после создания канала приложение их
@@ -62,6 +63,19 @@ object Notifier {
 
     /** Строка под заголовком: когда событие и сколько до него. */
     fun text(r: Reminder, t: Trigger, now: Long): String {
+        if (r.allDay) {
+            val d = Fmt.local(r.at).toLocalDate()
+            val today = Fmt.local(now).toLocalDate()
+            val n = ChronoUnit.DAYS.between(today, d).toInt()
+            val date = Fmt.dayShort(d, today)
+            return when {
+                n == 0 -> "Сегодня · весь день"
+                n == 1 -> "Завтра · $date"
+                n == 2 -> "Послезавтра · $date"
+                n > 2 -> "Через ${Fmt.dur(n * 1440)} · $date"
+                else -> "Было $date"
+            }
+        }
         val left = ((r.at - now) / MINUTE).toInt()
         val whenText = Fmt.long(r.at, now)
         return when {

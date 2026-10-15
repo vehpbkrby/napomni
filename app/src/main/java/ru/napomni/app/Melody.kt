@@ -5,15 +5,19 @@ import android.media.RingtoneManager
 import android.net.Uri
 import android.provider.OpenableColumns
 
-/** Мелодия будильника: последняя выбранная становится выбором по умолчанию для новых напоминаний. */
-object Melody {
+/** Последние выборы — по умолчанию для новых напоминаний: мелодия будильника и способ («через» сохраняется сразу). */
+object Prefs {
     private const val PREFS = "settings"
-    private const val KEY_LAST = "lastMelody"
+    private fun p(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    fun last(ctx: Context): String? = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_LAST, null)
+    fun lastMelody(ctx: Context): String? = p(ctx).getString("lastMelody", null)
+    fun setLastMelody(ctx: Context, uri: String?) = p(ctx).edit().putString("lastMelody", uri).apply()
 
-    fun remember(ctx: Context, uri: String?) =
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_LAST, uri).apply()
+    fun lastAlert(ctx: Context): Alert = Alert.entries.firstOrNull { it.name == p(ctx).getString("lastAlert", null) } ?: Alert.SOUND
+    fun setLastAlert(ctx: Context, a: Alert) = p(ctx).edit().putString("lastAlert", a.name).apply()
+}
+
+object Melody {
 
     /** Название для строки «Мелодия»: звук телефона — по его названию, свой файл — по имени файла. */
     fun name(ctx: Context, uri: String?): String {

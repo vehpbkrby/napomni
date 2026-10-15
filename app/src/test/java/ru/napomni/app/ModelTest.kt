@@ -4,16 +4,23 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.util.TimeZone
 
 class ModelTest {
     private val zone = ZoneId.of("Europe/Moscow")
     private fun ms(d: Int, h: Int, m: Int = 0) = LocalDateTime.of(2026, 10, d, h, m).atZone(zone).toInstant().toEpochMilli()
     private val created = ms(15, 15, 42)
     private val event = ms(18, 19)
-    private val r = Reminder(1, "ДР", event, listOf(1440, 2880), handledUntil = created)
+
+    // ДР в вс 18 окт 19:00, напомнить за 2 и за 1 день в 19:00.
+    private val r = Reminder(1, "ДР", event, days = listOf(1, 2), dayTime = 19 * 60, handledUntil = created)
+
+    // Дни напоминаний считаются в поясе телефона — в тестах это Москва.
+    @Before fun tz() = TimeZone.setDefault(TimeZone.getTimeZone(zone))
 
     @Test fun firstTriggerIsTwoDaysBefore() {
         assertEquals(ms(16, 19), r.nextTrigger()!!.time)
@@ -22,16 +29,17 @@ class ModelTest {
 
     @Test fun firesThenMovesOn() {
         val t = r.dueAt(ms(16, 19))!!
-        assertEquals(Kind.BEFORE, t.kind)
-        assertEquals(2880, t.beforeMin)
+        assertEquals(Kind.DAY, t.kind)
+        assertEquals(2, t.day)
         val after = r.handled(ms(16, 19), t)
-        assertTrue(after.beforeShown(2880))
-        assertFalse(after.beforeShown(1440))
+        val (d2, d1) = after.early().sortedBy { -it.day }
+        assertTrue(after.shown(d2))
+        assertFalse(after.shown(d1))
         assertEquals(ms(17, 19), after.nextTrigger()!!.time)
     }
 
     @Test fun earlyAlarmStillCounts() {
-        assertEquals(Kind.BEFORE, r.dueAt(ms(16, 19) - 500)!!.kind)
+        assertEquals(Kind.DAY, r.dueAt(ms(16, 19) - 500)!!.kind)
     }
 
     @Test fun missedTriggersShowOnlyLatest() {
@@ -77,10 +85,10 @@ class ModelTest {
         assertNull(x.nextTrigger())
     }
 
-    @Test fun beforeAndSilentDoNotNag() {
+    @Test fun earlyAndSilentDoNotNag() {
         val rep = r.copy(repeat = true)
-        val before = rep.dueAt(ms(16, 19))!!
-        assertNull(rep.handled(ms(16, 19), before).nagAt)
+        val early = rep.dueAt(ms(16, 19))!!
+        assertNull(rep.handled(ms(16, 19), early).nagAt)
         val silent = r.copy(repeat = true, alert = Alert.SILENT, handledUntil = ms(17, 19))
         assertNull(silent.handled(event, silent.dueAt(event)!!).nagAt)
     }
@@ -95,19 +103,53 @@ class ModelTest {
 
     @Test fun alarmRingsOnlyForFreshEvent() {
         val a = r.copy(alert = Alert.ALARM)
-        val before = Trigger(ms(17, 19), Kind.BEFORE, 1440)
-        assertEquals(Alert.SOUND, a.alertFor(before))
-        assertFalse(a.rings(before, ms(17, 19)))
+        val early = Trigger(ms(17, 19), Kind.DAY, day = 1)
+        assertEquals(Alert.SOUND, a.alertFor(early))
+        assertFalse(a.rings(early, ms(17, 19)))
         val ev = Trigger(event, Kind.EVENT)
         assertTrue(a.rings(ev, event + MINUTE))
         // Телефон был выключен: про событие часовой давности — уведомлением, без звона.
         assertFalse(a.rings(ev, event + 60 * MINUTE))
     }
 
-    @Test fun effectsOnlyForEvent() {
+    @Test fun effectsOnlyForMain() {
         val v = r.copy(speak = true)
-        assertFalse(v.effects(Trigger(ms(17, 19), Kind.BEFORE, 1440)))
+        assertFalse(v.effects(Trigger(ms(17, 19), Kind.DAY, day = 1)))
         assertTrue(v.effects(Trigger(event, Kind.EVENT)))
         assertFalse(v.copy(alert = Alert.SILENT).effects(Trigger(event, Kind.EVENT)))
+    }
+
+    @Test fun allDayEventRemindsOnlyByDays() {
+        val a = Reminder(2, "ДР", ms(18, 0), allDay = true, days = listOf(0, 1), dayTime = 9 * 60, handledUntil = created)
+        val t = a.triggers()
+        assertEquals(listOf(ms(17, 9), ms(18, 9)), t.map { it.time })
+        assertTrue(t.none { it.kind == Kind.EVENT })
+        assertTrue(a.isMain(t[1]))
+        assertFalse(a.isMain(t[0]))
+        assertTrue(a.isActive(ms(18, 23)))
+        assertFalse(a.isActive(ms(19, 0, 1)))
+        // Будильник у «весь день» звенит в сам день, а не накануне.
+        assertTrue(a.copy(alert = Alert.ALARM).rings(t[1], ms(18, 9)))
+    }
+
+    @Test fun dayReminderAfterTimedEventIsDropped() {
+        val morning = Reminder(3, "Врач", ms(18, 8), days = listOf(0, 1), dayTime = 9 * 60, handledUntil = created)
+        assertFalse(morning.dayFits(0))
+        assertEquals(listOf(ms(17, 9)), morning.early().map { it.time })
+    }
+
+    @Test fun hoursBeforeTimedEvent() {
+        val h = Reminder(4, "Встреча", event, before = listOf(60, 180), handledUntil = created)
+        assertEquals(listOf(ms(18, 16), ms(18, 18)), h.early().map { it.time })
+        assertTrue(h.copy(allDay = true, at = ms(18, 0)).early().isEmpty())
+    }
+
+    @Test fun migrateFromOneOne() {
+        // 1.1: «за 1 ч, за 1 день, за 2 дня» к событию в 19:00 → часы отдельно, дни — в 19:00.
+        val (hours, days, dayTime) = migrateBefore(listOf(60, 1440, 2880), event)
+        assertEquals(listOf(60), hours)
+        assertEquals(listOf(1, 2), days)
+        assertEquals(19 * 60, dayTime)
+        assertEquals(DEFAULT_DAY_TIME, migrateBefore(listOf(60), event).third)
     }
 }

@@ -66,12 +66,24 @@ object Store {
         val arr = root.getJSONArray("items")
         return (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
+            val at = o.getLong("at")
             val b = o.optJSONArray("before") ?: JSONArray()
+            val beforeAll = (0 until b.length()).map { b.getInt(it) }
+            // Записи 1.0–1.1 без «days»: дни лежали в before минутами — переносим.
+            val (hours, days, dayTime) = if (o.has("days")) {
+                val d = o.getJSONArray("days")
+                Triple(beforeAll, (0 until d.length()).map { d.getInt(it) }, o.optInt("dayTime", DEFAULT_DAY_TIME))
+            } else {
+                migrateBefore(beforeAll, at)
+            }
             Reminder(
                 id = o.getInt("id"),
                 title = o.getString("title"),
-                at = o.getLong("at"),
-                before = (0 until b.length()).map { b.getInt(it) },
+                at = at,
+                allDay = o.optBoolean("allDay"),
+                days = days,
+                dayTime = dayTime,
+                before = hours,
                 snoozeAt = if (o.isNull("snoozeAt")) null else o.getLong("snoozeAt"),
                 handledUntil = o.getLong("handled"),
                 done = o.optBoolean("done"),
@@ -94,6 +106,9 @@ object Store {
                     .put("id", r.id)
                     .put("title", r.title)
                     .put("at", r.at)
+                    .put("allDay", r.allDay)
+                    .put("days", JSONArray(r.days))
+                    .put("dayTime", r.dayTime)
                     .put("before", JSONArray(r.before))
                     .put("snoozeAt", r.snoozeAt ?: JSONObject.NULL)
                     .put("handled", r.handledUntil)
@@ -107,7 +122,7 @@ object Store {
                     .put("nags", r.nags)
             )
         }
-        val data = JSONObject().put("version", 1).put("nextId", nextId).put("items", arr).toString(1)
+        val data = JSONObject().put("version", 2).put("nextId", nextId).put("items", arr).toString(1)
         val f = file(ctx)
         val out = f.startWrite()
         try {

@@ -89,4 +89,58 @@ object Fmt {
     }
 
     fun before(min: Int) = "за ${dur(min)}"
+
+    /** Кнопка дня в шаге 2: «В день события», «За 1 день», «За 5 дней», «За неделю». */
+    fun dayLabel(d: Int): String = when (d) {
+        0 -> "В день события"
+        7 -> "За неделю"
+        else -> "За ${days(d)}"
+    }
+
+    /** Подпись срабатывания заранее в списке: «за 2 дня», «в день события», «за 1 ч». */
+    fun early(t: Trigger): String = if (t.kind == Kind.DAY) dayLabel(t.day).lowercase() else before(t.beforeMin)
+
+    /** «18 окт». */
+    fun dm(d: LocalDate) = "${d.dayOfMonth} ${MON[d.monthValue - 1]}"
+
+    /** «вс 18 окт». */
+    fun dayShort(d: LocalDate, today: LocalDate = LocalDate.now()) = "${wd(d).lowercase()} ${dayMonth(d, today)}"
+
+    /** Коротко для строки «Напомню: …»: «сегодня, 17:42», «завтра, 10:00», «пт 16, 10:00». */
+    fun compact(at: Long, now: Long, zone: ZoneId = ZoneId.systemDefault()): String {
+        val t = local(at, zone)
+        val today = local(now, zone).toLocalDate()
+        return when (ChronoUnit.DAYS.between(today, t.toLocalDate())) {
+            0L -> "сегодня, ${hm(t)}"
+            1L -> "завтра, ${hm(t)}"
+            else -> "${wd(t.toLocalDate()).lowercase()} ${t.dayOfMonth}, ${hm(t)}"
+        }
+    }
+
+    /** Когда событие полностью: «вс 18 окт, 19:00» или «вс 18 окт, весь день». */
+    fun event(r: Reminder, now: Long, zone: ZoneId = ZoneId.systemDefault()): String {
+        if (!r.allDay) return long(r.at, now, zone)
+        val d = local(r.at, zone).toLocalDate()
+        val today = local(now, zone).toLocalDate()
+        val day = when (ChronoUnit.DAYS.between(today, d)) {
+            0L -> "сегодня"
+            1L -> "завтра"
+            else -> dayShort(d, today)
+        }
+        return "$day, весь день"
+    }
+
+    /** Для виджета и списка: у «весь день» вместо времени — день. */
+    fun whenShort(r: Reminder, now: Long, zone: ZoneId = ZoneId.systemDefault()): String {
+        val shown = r.shownAt(now)
+        if (!r.allDay || shown != r.at) return short(shown, now, zone)
+        val d = local(r.at, zone).toLocalDate()
+        val today = local(now, zone).toLocalDate()
+        return when (val n = ChronoUnit.DAYS.between(today, d)) {
+            0L -> "Весь день"
+            1L -> "Завтра"
+            in 2..6 -> wd(d)
+            else -> if (n < 0) "Было" else dayMonth(d, today)
+        }
+    }
 }

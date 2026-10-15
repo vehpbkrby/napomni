@@ -91,7 +91,7 @@ class Widget : AppWidgetProvider() {
                     return@forEachIndexed
                 }
                 v.setViewVisibility(row, View.VISIBLE)
-                v.setTextViewText(time, Fmt.short(r.shownAt(now), now))
+                v.setTextViewText(time, Fmt.whenShort(r, now))
                 v.setTextViewText(title, r.title)
                 val subText = subtitle(r, now)
                 v.setTextViewText(sub, subText)
@@ -116,8 +116,8 @@ class Widget : AppWidgetProvider() {
         fun subtitle(r: Reminder, now: Long): String {
             val parts = mutableListOf<String>()
             if (r.alert != Alert.SOUND) parts += r.alert.label.lowercase()
-            if (r.at <= now) parts += "отложено"
-            else r.before.filter { !r.beforeShown(it) }.sortedDescending().joinToString(", ") { Fmt.before(it) }
+            if (r.end() <= now) parts += "отложено"
+            else r.early().filter { !r.shown(it) }.joinToString(", ") { Fmt.early(it) }
                 .takeIf { it.isNotEmpty() }?.let { parts += it }
             return parts.joinToString(" · ")
         }

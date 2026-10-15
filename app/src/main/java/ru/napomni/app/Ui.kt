@@ -230,6 +230,51 @@ fun NumberGrid(
     }
 }
 
+/**
+ * Неделя крупными кнопками (4×2) от дня открытия листа: «Сегодня / чт 15», «Завтра», «Послезавтра»,
+ * дальше «Вс / 18 окт». Ближайшая неделя — приоритет, остальное — календарём.
+ */
+@Composable
+fun WeekGrid(week: List<LocalDate>, selected: LocalDate?, today: LocalDate, onPick: (LocalDate) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(10.dp)
+    Column {
+        week.withIndex().chunked(4).forEach { row ->
+            Row(Modifier.fillMaxWidth().padding(bottom = 5.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                row.forEach { (i, d) ->
+                    val sel = d == selected
+                    val en = d >= today
+                    val wd = Fmt.WEEKDAYS[d.dayOfWeek.value - 1]
+                    val (top, sub) = when (i) {
+                        0 -> "Сегодня" to "${wd.lowercase()} ${d.dayOfMonth}"
+                        1 -> "Завтра" to "${wd.lowercase()} ${d.dayOfMonth}"
+                        2 -> "Послезавтра" to "${wd.lowercase()} ${d.dayOfMonth}"
+                        else -> wd to Fmt.dm(d)
+                    }
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .clip(shape)
+                            .background(if (sel) cs.primaryContainer else Color.Transparent)
+                            .border(1.dp, if (sel) cs.primary.copy(alpha = .6f) else cs.outline.copy(alpha = if (en) .45f else .2f), shape)
+                            .clickable(enabled = en) { onPick(d) }
+                            .padding(vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        val c = when {
+                            sel -> cs.onPrimaryContainer
+                            en -> cs.onSurface
+                            else -> cs.onSurface.copy(alpha = .35f)
+                        }
+                        Text(top, fontSize = 13.sp, color = c, maxLines = 1, softWrap = false)
+                        Text(sub, fontSize = 11.sp, color = if (sel) cs.onPrimaryContainer else cs.onSurfaceVariant, maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** Строка-переключатель: нажатие по всей строке, не только по рычажку. */
 @Composable
 fun Toggle(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {

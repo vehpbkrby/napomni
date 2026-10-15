@@ -173,7 +173,12 @@ private fun Home(resumes: Int) {
             groups.forEach { (title, list) ->
                 item(key = "g$title") { Label(title) }
                 items(list, key = { it.id }) { r ->
-                    ReminderRow(r, now, past = false, timeText = if (title == "Позже") Fmt.short(r.shownAt(now), now) else Fmt.hm(Fmt.local(r.shownAt(now), zone))) {
+                    val timeText = when {
+                        r.allDay && r.shownAt(now) == r.at -> if (title == "Позже") Fmt.whenShort(r, now) else "весь день"
+                        title == "Позже" -> Fmt.short(r.shownAt(now), now)
+                        else -> Fmt.hm(Fmt.local(r.shownAt(now), zone))
+                    }
+                    ReminderRow(r, now, past = false, timeText = timeText) {
                         QuickAddActivity.open(ctx, r.id)
                     }
                 }
@@ -196,7 +201,9 @@ private fun Home(resumes: Int) {
                 }
                 if (showPast) {
                     items(past, key = { "p${it.id}" }) { r ->
-                        ReminderRow(r, now, past = true, timeText = Fmt.short(r.at, now)) { QuickAddActivity.open(ctx, r.id) }
+                        ReminderRow(r, now, past = true, timeText = if (r.allDay) Fmt.dayShort(Fmt.local(r.at).toLocalDate()) else Fmt.short(r.at, now)) {
+                            QuickAddActivity.open(ctx, r.id)
+                        }
                     }
                     item(key = "clear") {
                         TextButton(onClick = { confirmClear = true }) { Text("Очистить прошедшие") }
@@ -263,12 +270,13 @@ private fun subtitle(r: Reminder, now: Long, past: Boolean): String {
     if (past) return if (r.done) "готово" else ""
     val parts = mutableListOf<String>()
     if (r.alert != Alert.SOUND) parts += r.alert.label.lowercase()
-    if (r.at <= now) parts += "отложено, событие было ${Fmt.short(r.at, now)}"
-    else parts += "через ${Fmt.approx(((r.at - now) / MINUTE).toInt())}"
-    if (r.before.isNotEmpty() && r.at > now) {
-        parts += "заранее: " + r.before.sortedDescending().joinToString(", ") {
-            if (r.beforeShown(it)) "${Fmt.before(it)} ✓" else Fmt.before(it)
-        }
+    when {
+        r.end() <= now -> parts += "отложено, событие было ${if (r.allDay) Fmt.dayShort(Fmt.local(r.at).toLocalDate()) else Fmt.short(r.at, now)}"
+        r.at > now -> parts += "через ${Fmt.approx(((r.at - now) / MINUTE).toInt())}"
+    }
+    val early = r.early()
+    if (early.isNotEmpty() && r.end() > now) {
+        parts += "заранее: " + early.joinToString(", ") { if (r.shown(it)) "${Fmt.early(it)} ✓" else Fmt.early(it) }
     }
     return parts.joinToString(" · ")
 }

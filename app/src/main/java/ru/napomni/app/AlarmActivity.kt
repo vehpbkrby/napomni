@@ -96,8 +96,8 @@ private fun AlarmScreen(r: Reminder, now: Long, act: (String) -> Unit) {
                 Modifier.fillMaxWidth().align(Alignment.Center).padding(bottom = 120.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text(Fmt.hm(t), fontSize = 56.sp, fontWeight = FontWeight.Medium)
-                Text(Fmt.long(r.at, now), fontSize = 16.sp, color = cs.onSurfaceVariant)
+                Text(if (r.allDay) "Сегодня" else Fmt.hm(t), fontSize = 56.sp, fontWeight = FontWeight.Medium)
+                Text(Fmt.event(r, now), fontSize = 16.sp, color = cs.onSurfaceVariant)
                 Spacer(Modifier.height(32.dp))
                 Text(r.title, fontSize = 24.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
                 if (r.repeat) Text(
