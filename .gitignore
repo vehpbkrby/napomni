@@ -1,0 +1,9 @@
+build/
+.gradle/
+app/build/
+local.properties
+dist/
+# Постоянный ключ подписи — только в резервной копии, не в git
+release.keystore
+keystore.properties
+dist-build.log

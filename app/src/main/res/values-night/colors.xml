@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#141417</color>
+    <color name="w_bg">#26262B</color>
+    <color name="w_text">#ECECEF</color>
+    <color name="w_sub">#A6A6AE</color>
+    <color name="w_accent">#8AB4F8</color>
+    <color name="w_on_accent">#0B1F44</color>
+    <color name="w_chip_stroke">#44FFFFFF</color>
+    <color name="w_divider">#22FFFFFF</color>
+</resources>

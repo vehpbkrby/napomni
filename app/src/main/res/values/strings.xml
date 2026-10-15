@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Напомни</string>
+    <string name="add">Новое напоминание</string>
+    <string name="empty">Напоминаний нет — нажмите «+»</string>
+    <string name="widget_desc">Быстро добавить напоминание и видеть ближайшие</string>
+    <string name="q1">+1 ч</string>
+    <string name="q2">+3 ч</string>
+    <string name="q3">Завтра</string>
+    <string name="q4">Дата</string>
+</resources>

@@ -1,0 +1,107 @@
+package ru.napomni.app
+
+import android.content.Context
+import android.util.AtomicFile
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+
+/**
+ * Напоминания — один JSON-файл во внутренней папке приложения. Наружу ничего не уходит:
+ * у приложения нет даже разрешения на интернет. Экран, виджет и будильник живут в одном
+ * процессе и читают отсюда же.
+ */
+object Store {
+    private const val FILE = "reminders.json"
+    private var items: List<Reminder>? = null
+    private var nextId = 1
+    private val _flow = MutableStateFlow<List<Reminder>>(emptyList())
+    val flow: StateFlow<List<Reminder>> get() = _flow
+
+    @Synchronized
+    fun all(ctx: Context): List<Reminder> = items ?: load(ctx).also { items = it; _flow.value = it }
+
+    @Synchronized
+    fun get(ctx: Context, id: Int): Reminder? = all(ctx).firstOrNull { it.id == id }
+
+    @Synchronized
+    fun update(ctx: Context, f: (List<Reminder>) -> List<Reminder>) {
+        val new = f(all(ctx))
+        save(ctx, new)
+        items = new
+        _flow.value = new
+    }
+
+    @Synchronized
+    fun add(ctx: Context, make: (id: Int) -> Reminder) {
+        all(ctx)
+        val r = make(nextId++)
+        update(ctx) { it + r }
+    }
+
+    fun edit(ctx: Context, id: Int, f: (Reminder) -> Reminder) =
+        update(ctx) { list -> list.map { if (it.id == id) f(it) else it } }
+
+    fun remove(ctx: Context, ids: Collection<Int>) = update(ctx) { list -> list.filter { it.id !in ids } }
+
+    private fun file(ctx: Context) = AtomicFile(File(ctx.filesDir, FILE))
+
+    private fun load(ctx: Context): List<Reminder> {
+        val f = file(ctx)
+        if (!f.baseFile.exists()) return emptyList()
+        return try {
+            parse(String(f.readFully(), Charsets.UTF_8))
+        } catch (e: Exception) {
+            // Испорченный файл не должен ронять будильник при каждом запуске: откладываем в сторону.
+            f.baseFile.renameTo(File(ctx.filesDir, "$FILE.bad-${System.currentTimeMillis()}"))
+            emptyList()
+        }
+    }
+
+    private fun parse(json: String): List<Reminder> {
+        val root = JSONObject(json)
+        nextId = root.optInt("nextId", 1)
+        val arr = root.getJSONArray("items")
+        return (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            val b = o.optJSONArray("before") ?: JSONArray()
+            Reminder(
+                id = o.getInt("id"),
+                title = o.getString("title"),
+                at = o.getLong("at"),
+                before = (0 until b.length()).map { b.getInt(it) },
+                snoozeAt = if (o.isNull("snoozeAt")) null else o.getLong("snoozeAt"),
+                handledUntil = o.getLong("handled"),
+                done = o.optBoolean("done"),
+            )
+        }.also { list -> nextId = maxOf(nextId, (list.maxOfOrNull { it.id } ?: 0) + 1) }
+    }
+
+    private fun save(ctx: Context, list: List<Reminder>) {
+        val arr = JSONArray()
+        list.forEach { r ->
+            arr.put(
+                JSONObject()
+                    .put("id", r.id)
+                    .put("title", r.title)
+                    .put("at", r.at)
+                    .put("before", JSONArray(r.before))
+                    .put("snoozeAt", r.snoozeAt ?: JSONObject.NULL)
+                    .put("handled", r.handledUntil)
+                    .put("done", r.done)
+            )
+        }
+        val data = JSONObject().put("version", 1).put("nextId", nextId).put("items", arr).toString(1)
+        val f = file(ctx)
+        val out = f.startWrite()
+        try {
+            out.write(data.toByteArray(Charsets.UTF_8))
+            f.finishWrite(out)
+        } catch (e: Exception) {
+            f.failWrite(out)
+            throw e
+        }
+    }
+}
