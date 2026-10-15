@@ -54,4 +54,60 @@ class ModelTest {
     @Test fun doneHasNoTriggers() {
         assertNull(r.copy(done = true).nextTrigger())
     }
+
+    @Test fun repeatNagsEveryFiveMinutesUpToAnHour() {
+        var x = r.copy(repeat = true, handledUntil = ms(17, 19))
+        var now = event
+        val first = x.dueAt(now)!!
+        assertEquals(Kind.EVENT, first.kind)
+        x = x.handled(now, first)
+        assertEquals(event + NAG_MIN * MINUTE, x.nagAt)
+        assertTrue(x.isActive(event + 1))
+        assertEquals(x.nagAt, x.shownAt(event + 1))
+        repeat(NAG_MAX - 1) {
+            now = x.nagAt!!
+            val t = x.dueAt(now)!!
+            assertEquals(Kind.NAG, t.kind)
+            x = x.handled(now, t)
+        }
+        assertEquals(NAG_MAX, x.nags)
+        now = x.nagAt!!
+        x = x.handled(now, x.dueAt(now)!!)
+        assertNull(x.nagAt)
+        assertNull(x.nextTrigger())
+    }
+
+    @Test fun beforeAndSilentDoNotNag() {
+        val rep = r.copy(repeat = true)
+        val before = rep.dueAt(ms(16, 19))!!
+        assertNull(rep.handled(ms(16, 19), before).nagAt)
+        val silent = r.copy(repeat = true, alert = Alert.SILENT, handledUntil = ms(17, 19))
+        assertNull(silent.handled(event, silent.dueAt(event)!!).nagAt)
+    }
+
+    @Test fun reactionStopsRepeats() {
+        val x = r.copy(repeat = true, nagAt = event + 5 * MINUTE, nags = 1, handledUntil = event)
+        assertNull(x.reacted().nextTrigger())
+        val s = x.snoozed(event, 10)
+        assertNull(s.nagAt)
+        assertEquals(Kind.SNOOZE, s.nextTrigger()!!.kind)
+    }
+
+    @Test fun alarmRingsOnlyForFreshEvent() {
+        val a = r.copy(alert = Alert.ALARM)
+        val before = Trigger(ms(17, 19), Kind.BEFORE, 1440)
+        assertEquals(Alert.SOUND, a.alertFor(before))
+        assertFalse(a.rings(before, ms(17, 19)))
+        val ev = Trigger(event, Kind.EVENT)
+        assertTrue(a.rings(ev, event + MINUTE))
+        // Телефон был выключен: про событие часовой давности — уведомлением, без звона.
+        assertFalse(a.rings(ev, event + 60 * MINUTE))
+    }
+
+    @Test fun effectsOnlyForEvent() {
+        val v = r.copy(speak = true)
+        assertFalse(v.effects(Trigger(ms(17, 19), Kind.BEFORE, 1440)))
+        assertTrue(v.effects(Trigger(event, Kind.EVENT)))
+        assertFalse(v.copy(alert = Alert.SILENT).effects(Trigger(event, Kind.EVENT)))
+    }
 }

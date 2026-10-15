@@ -27,6 +27,12 @@
         <item name="android:textSize">13sp</item>
     </style>
 
+    <style name="WidgetDay" parent="WidgetChip">
+        <item name="android:textSize">12sp</item>
+        <item name="android:paddingTop">6dp</item>
+        <item name="android:paddingBottom">6dp</item>
+    </style>
+
     <style name="WidgetRow">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>

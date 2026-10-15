@@ -1,12 +1,17 @@
 package ru.napomni.app
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.media.RingtoneManager
+import android.net.Uri
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,6 +37,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -83,7 +90,8 @@ class QuickAddActivity : ComponentActivity() {
         ) askNotif.launch(Manifest.permission.POST_NOTIFICATIONS)
         val edit = intent.getIntExtra(EXTRA_ID, -1).takeIf { it > 0 }?.let { Store.get(this, it) }
         val preset = intent.getStringExtra(EXTRA_PRESET)
-        setContent { AppTheme { Sheet(edit, preset) { finish() } } }
+        val day = intent.getLongExtra(EXTRA_DAY, Long.MIN_VALUE).takeIf { it != Long.MIN_VALUE }?.let { LocalDate.ofEpochDay(it) }
+        setContent { AppTheme { Sheet(edit, preset, day) { finish() } } }
     }
 
     companion object {
@@ -91,8 +99,9 @@ class QuickAddActivity : ComponentActivity() {
         const val EXTRA_ID = "id"
         const val PRESET_1H = "1h"
         const val PRESET_3H = "3h"
-        const val PRESET_TOMORROW = "tomorrow"
+        const val PRESET_DAY = "day"
         const val PRESET_DATE = "date"
+        const val EXTRA_DAY = "day"
 
         fun open(ctx: Context, id: Int? = null) = ctx.startActivity(
             Intent(ctx, QuickAddActivity::class.java).apply { id?.let { putExtra(EXTRA_ID, it) } }
@@ -102,11 +111,11 @@ class QuickAddActivity : ComponentActivity() {
 
 private enum class Mode { IN, AT }
 
-/** Утро по умолчанию для «Завтра» с виджета. */
+/** Время по умолчанию для кнопок дней с виджета («Завтра», «Вс 18»): утро, час можно сменить. */
 private const val MORNING = 9
 
 @Composable
-private fun Sheet(edit: Reminder?, preset: String?, onClose: () -> Unit) {
+private fun Sheet(edit: Reminder?, preset: String?, day: LocalDate?, onClose: () -> Unit) {
     val ctx = LocalContext.current
     val cs = MaterialTheme.colorScheme
     val zone = remember { ZoneId.systemDefault() }
@@ -127,7 +136,7 @@ private fun Sheet(edit: Reminder?, preset: String?, onClose: () -> Unit) {
 
     var text by remember { mutableStateOf(TextFieldValue(edit?.title ?: "", TextRange(edit?.title?.length ?: 0))) }
     var mode by remember {
-        mutableStateOf(if (edit != null || preset == QuickAddActivity.PRESET_TOMORROW || preset == QuickAddActivity.PRESET_DATE) Mode.AT else Mode.IN)
+        mutableStateOf(if (edit != null || preset == QuickAddActivity.PRESET_DAY || preset == QuickAddActivity.PRESET_DATE) Mode.AT else Mode.IN)
     }
     var inMin by remember {
         mutableStateOf(
@@ -145,16 +154,45 @@ private fun Sheet(edit: Reminder?, preset: String?, onClose: () -> Unit) {
         mutableStateOf<LocalDate?>(
             when {
                 editAt != null -> editAt.toLocalDate()
-                preset == QuickAddActivity.PRESET_TOMORROW -> start.plusDays(1)
+                // Дата зашита в кнопку виджета; если виджет не успел обновиться после полуночи — не раньше сегодня.
+                preset == QuickAddActivity.PRESET_DAY -> maxOf(day ?: start.plusDays(1), start)
                 preset == QuickAddActivity.PRESET_DATE -> start
                 else -> null
             }
         )
     }
-    var hour by remember { mutableStateOf(editAt?.hour ?: if (preset == QuickAddActivity.PRESET_TOMORROW) MORNING else null) }
+    var hour by remember { mutableStateOf(editAt?.hour ?: if (preset == QuickAddActivity.PRESET_DAY) MORNING else null) }
     var minute by remember { mutableIntStateOf(editAt?.minute ?: 0) }
     var month by remember { mutableStateOf(YearMonth.from(date ?: start)) }
     var before by remember { mutableStateOf(edit?.before?.toSet() ?: emptySet()) }
+    var alert by remember { mutableStateOf(edit?.alert ?: Alert.SOUND) }
+    var melody by remember { mutableStateOf(if (edit != null) edit.melody else Melody.last(ctx)) }
+    var repeat by remember { mutableStateOf(edit?.repeat ?: false) }
+    var speak by remember { mutableStateOf(edit?.speak ?: false) }
+    var flash by remember { mutableStateOf(edit?.flash ?: false) }
+    var melodyMenu by remember { mutableStateOf(false) }
+    val melodyName = remember(melody) { Melody.name(ctx, melody) }
+    val pickTone = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        val uri: Uri? = if (Build.VERSION.SDK_INT >= 33) {
+            res.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI, Uri::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            res.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+        }
+        if (res.resultCode == Activity.RESULT_OK && uri != null) {
+            melody = if (uri == Settings.System.DEFAULT_ALARM_ALERT_URI) null else uri.toString()
+        }
+    }
+    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            // Право читать файл и после перезагрузки — иначе к сроку мелодия не откроется.
+            try {
+                ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: SecurityException) {
+            }
+            melody = uri.toString()
+        }
+    }
     var error by remember { mutableStateOf<String?>(null) }
     var parsed by remember { mutableStateOf(TimeParser.parse(text.text, LocalDateTime.now(zone))) }
     var lastKey by remember { mutableStateOf(parsed.copy(spans = emptyList(), title = "")) }
@@ -222,11 +260,28 @@ private fun Sheet(edit: Reminder?, preset: String?, onClose: () -> Unit) {
         }
         val title = TimeParser.parse(text.text, LocalDateTime.now(zone)).title.ifBlank { "Напоминание" }
         val bf = before.filter { at - it * MINUTE > t }.sorted()
+        // Лишние для способа галочки не сохраняем: у «Тихо» нет повтора, у «Вибро» — голоса.
+        val rep = repeat && alert != Alert.SILENT
+        val voice = speak && (alert == Alert.SOUND || alert == Alert.ALARM)
+        val fl = flash && alert != Alert.SILENT
+        val mel = if (alert == Alert.ALARM) melody else null
+        if (alert == Alert.ALARM) Melody.remember(ctx, melody)
         if (edit != null) {
-            Store.edit(ctx, edit.id) { it.copy(title = title, at = at, before = bf, snoozeAt = null, handledUntil = t, done = false) }
+            Store.edit(ctx, edit.id) {
+                it.copy(
+                    title = title, at = at, before = bf, snoozeAt = null, handledUntil = t, done = false,
+                    alert = alert, melody = mel, repeat = rep, speak = voice, flash = fl, nagAt = null, nags = 0,
+                )
+            }
             Notifier.cancel(ctx, edit.id)
+            AlarmService.stop(ctx, edit.id)
         } else {
-            Store.add(ctx) { id -> Reminder(id = id, title = title, at = at, before = bf, handledUntil = t) }
+            Store.add(ctx) { id ->
+                Reminder(
+                    id = id, title = title, at = at, before = bf, handledUntil = t,
+                    alert = alert, melody = mel, repeat = rep, speak = voice, flash = fl,
+                )
+            }
         }
         Scheduler.run(ctx)
         Toast.makeText(ctx, "Напомню ${Fmt.long(at, t)}", Toast.LENGTH_SHORT).show()
@@ -392,6 +447,55 @@ private fun Sheet(edit: Reminder?, preset: String?, onClose: () -> Unit) {
                 if (early.isNotEmpty()) Text(
                     "заранее: " + early.joinToString(" · ") { Fmt.long(tgt!! - it * MINUTE, now) },
                     fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp),
+                )
+
+                Label("Как напомнить")
+                Chips {
+                    Alert.entries.forEach { a -> Chip(a.label, selected = alert == a) { alert = a } }
+                }
+                Spacer(Modifier.height(4.dp))
+                if (alert == Alert.ALARM) {
+                    Box {
+                        OptionRow("Мелодия", melodyName) { melodyMenu = true }
+                        DropdownMenu(expanded = melodyMenu, onDismissRequest = { melodyMenu = false }) {
+                            DropdownMenuItem(text = { Text("Звуки телефона") }, onClick = {
+                                melodyMenu = false
+                                pickTone.launch(
+                                    Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
+                                        .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
+                                        .putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Мелодия будильника")
+                                        .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+                                        .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                                        .putExtra(
+                                            RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
+                                            melody?.let { Uri.parse(it) } ?: Settings.System.DEFAULT_ALARM_ALERT_URI,
+                                        )
+                                )
+                            })
+                            DropdownMenuItem(text = { Text("Свой файл…") }, onClick = {
+                                melodyMenu = false
+                                pickFile.launch(arrayOf("audio/*"))
+                            })
+                        }
+                    }
+                    if (!Notifier.fullScreenAllowed(ctx)) Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Без разрешения окно будильника не появится поверх блокировки — будет только мелодия и уведомление.",
+                            fontSize = 12.sp, color = cs.error, modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = {
+                            ctx.startActivity(
+                                Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${ctx.packageName}"))
+                            )
+                        }) { Text("Разрешить") }
+                    }
+                }
+                if (alert != Alert.SILENT) Toggle("Повторять каждые $NAG_MIN мин, пока не отвечу", repeat) { repeat = it }
+                if (alert == Alert.SOUND || alert == Alert.ALARM) Toggle("Читать вслух", speak) { speak = it }
+                if (alert != Alert.SILENT) Toggle("Вспышка", flash) { flash = it }
+                if (alert == Alert.ALARM && early.isNotEmpty()) Text(
+                    "заранее придёт обычным уведомлением со звуком",
+                    fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp),
                 )
 
                 Button(

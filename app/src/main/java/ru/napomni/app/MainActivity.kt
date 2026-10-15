@@ -101,6 +101,7 @@ private fun Home(resumes: Int) {
 
     val notifOk = remember(resumes) { Notifier.allowed(ctx) }
     val exactOk = remember(resumes) { Scheduler.canExact(ctx) }
+    val fullScreenOk = remember(resumes) { Notifier.fullScreenAllowed(ctx) }
     val batteryOk = remember(resumes) {
         ctx.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(ctx.packageName)
     }
@@ -139,6 +140,17 @@ private fun Home(resumes: Int) {
                     "Разрешить точное время",
                 ) {
                     ctx.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${ctx.packageName}")))
+                }
+            }
+            if (!fullScreenOk && active.any { it.alert == Alert.ALARM }) item {
+                Banner(
+                    "Будильник не откроется поверх блокировки",
+                    "Мелодия зазвучит, но окно с кнопками «Готово» и «Отложить» появится только в шторке.",
+                    "Разрешить",
+                ) {
+                    ctx.startActivity(
+                        Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${ctx.packageName}"))
+                    )
                 }
             }
             if (!batteryOk) item {
@@ -250,7 +262,8 @@ private fun ReminderRow(r: Reminder, now: Long, past: Boolean, timeText: String,
 private fun subtitle(r: Reminder, now: Long, past: Boolean): String {
     if (past) return if (r.done) "готово" else ""
     val parts = mutableListOf<String>()
-    if (r.at <= now && r.snoozeAt != null) parts += "отложено, событие было ${Fmt.short(r.at, now)}"
+    if (r.alert != Alert.SOUND) parts += r.alert.label.lowercase()
+    if (r.at <= now) parts += "отложено, событие было ${Fmt.short(r.at, now)}"
     else parts += "через ${Fmt.approx(((r.at - now) / MINUTE).toInt())}"
     if (r.before.isNotEmpty() && r.at > now) {
         parts += "заранее: " + r.before.sortedDescending().joinToString(", ") {

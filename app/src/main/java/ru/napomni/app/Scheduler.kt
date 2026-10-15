@@ -9,7 +9,7 @@ import android.os.Build
 
 /**
  * Один будильник на ближайшее срабатывание из всех напоминаний. Сработал — показываем всё
- * наступившее и ставим следующий. Так же после перезагрузки и смены времени.
+ * наступившее и ставим следующий. Так же после перезагрузки, смены времени и обновления виджета.
  *
  * setAlarmClock, а не setExactAndAllowWhileIdle: на Realme («Хрюня», 2026-09) точные будильники
  * при выключенном экране приходили с опозданием до 5 минут и больше; «будильник» оболочка не
@@ -66,23 +66,36 @@ class SystemReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) = Scheduler.run(ctx)
 }
 
-/** Кнопки в уведомлении. */
-class ActionReceiver : BroadcastReceiver() {
-    override fun onReceive(ctx: Context, intent: Intent) {
-        val id = intent.getIntExtra(EXTRA_ID, -1)
+/** Реакции на напоминание — из уведомления и с экрана будильника. */
+object Actions {
+    const val DONE = "ru.napomni.app.DONE"
+    const val SNOOZE_10 = "ru.napomni.app.SNOOZE_10"
+    const val SNOOZE_60 = "ru.napomni.app.SNOOZE_60"
+    const val DISMISS = "ru.napomni.app.DISMISS"
+    const val EXTRA_ID = "id"
+
+    fun handle(ctx: Context, id: Int, action: String?) {
         val now = System.currentTimeMillis()
-        when (intent.action) {
-            ACTION_DONE -> Store.edit(ctx, id) { it.copy(done = true) }
-            ACTION_SNOOZE -> Store.edit(ctx, id) { it.copy(snoozeAt = now + SNOOZE_MIN * MINUTE, done = false) }
+        when (action) {
+            DONE -> Store.edit(ctx, id) { it.copy(done = true).reacted() }
+            SNOOZE_10 -> Store.edit(ctx, id) { it.snoozed(now, 10) }
+            SNOOZE_60 -> Store.edit(ctx, id) { it.snoozed(now, 60) }
+            // Смахнули уведомление — увидели: повторы больше не нужны.
+            DISMISS -> Store.edit(ctx, id) { it.reacted() }
         }
-        Notifier.cancel(ctx, id)
+        AlarmService.stop(ctx, id)
+        if (action != DISMISS) Notifier.cancel(ctx, id)
         Scheduler.run(ctx)
     }
 
-    companion object {
-        const val ACTION_DONE = "ru.napomni.app.DONE"
-        const val ACTION_SNOOZE = "ru.napomni.app.SNOOZE"
-        const val EXTRA_ID = "id"
-        const val SNOOZE_MIN = 60
-    }
+    fun pending(ctx: Context, id: Int, action: String): PendingIntent = PendingIntent.getBroadcast(
+        ctx, id,
+        Intent(ctx, ActionReceiver::class.java).setAction(action).putExtra(EXTRA_ID, id),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+}
+
+class ActionReceiver : BroadcastReceiver() {
+    override fun onReceive(ctx: Context, intent: Intent) =
+        Actions.handle(ctx, intent.getIntExtra(Actions.EXTRA_ID, -1), intent.action)
 }

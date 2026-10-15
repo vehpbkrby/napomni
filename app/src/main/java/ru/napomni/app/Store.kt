@@ -75,6 +75,13 @@ object Store {
                 snoozeAt = if (o.isNull("snoozeAt")) null else o.getLong("snoozeAt"),
                 handledUntil = o.getLong("handled"),
                 done = o.optBoolean("done"),
+                alert = Alert.entries.firstOrNull { it.name == o.optString("alert") } ?: Alert.SOUND,
+                melody = if (o.isNull("melody")) null else o.optString("melody").ifEmpty { null },
+                repeat = o.optBoolean("repeat"),
+                speak = o.optBoolean("speak"),
+                flash = o.optBoolean("flash"),
+                nagAt = if (o.isNull("nagAt")) null else o.getLong("nagAt"),
+                nags = o.optInt("nags"),
             )
         }.also { list -> nextId = maxOf(nextId, (list.maxOfOrNull { it.id } ?: 0) + 1) }
     }
@@ -91,6 +98,13 @@ object Store {
                     .put("snoozeAt", r.snoozeAt ?: JSONObject.NULL)
                     .put("handled", r.handledUntil)
                     .put("done", r.done)
+                    .put("alert", r.alert.name)
+                    .put("melody", r.melody ?: JSONObject.NULL)
+                    .put("repeat", r.repeat)
+                    .put("speak", r.speak)
+                    .put("flash", r.flash)
+                    .put("nagAt", r.nagAt ?: JSONObject.NULL)
+                    .put("nags", r.nags)
             )
         }
         val data = JSONObject().put("version", 1).put("nextId", nextId).put("items", arr).toString(1)
