@@ -48,6 +48,9 @@ data class Reminder(
     val days: List<Int> = emptyList(),
     /** «В конкретные дни»: даты (эпоха-дни), каждая в [dayTime]. Тогда [at] — начало последней даты, событие «весь день». */
     val dates: List<Long> = emptyList(),
+    /** Повтор события; [weekdays] (1 — пн … 7 — вс) — для «каждую неделю». [at] — ближайший раз. */
+    val rule: Rule = Rule.NONE,
+    val weekdays: List<Int> = emptyList(),
     /** Время суток для напоминаний по дням, минуты от полуночи. */
     val dayTime: Int = DEFAULT_DAY_TIME,
     /** За сколько минут до события со временем напомнить ещё. */
@@ -67,6 +70,15 @@ data class Reminder(
     val nagAt: Long? = null,
     val nags: Int = 0,
 )
+
+/** Повторяющееся событие. */
+enum class Rule(val label: String) {
+    NONE(""),
+    DAILY("каждый день"),
+    WEEKLY("каждую неделю"),
+    MONTHLY("каждый месяц"),
+    YEARLY("каждый год"),
+}
 
 enum class Kind { BEFORE, DAY, EVENT, SNOOZE, NAG }
 
@@ -151,8 +163,36 @@ fun Reminder.effects(t: Trigger): Boolean = isMain(t) && (speak || flash) && ale
 
 private fun Long?.after(now: Long) = this != null && this > now
 
+/** Следующий раз повторяющегося события после [t]. */
+fun Reminder.step(t: LocalDateTime): LocalDateTime = when (rule) {
+    Rule.DAILY -> t.plusDays(1)
+    Rule.WEEKLY -> if (weekdays.isEmpty()) t.plusWeeks(1) else {
+        var n = t.plusDays(1)
+        while (n.dayOfWeek.value !in weekdays) n = n.plusDays(1)
+        n
+    }
+    Rule.MONTHLY -> t.plusMonths(1)
+    Rule.YEARLY -> t.plusYears(1)
+    Rule.NONE -> t
+}
+
+/** Повторяющееся: прошедший раз сменяется ближайшим будущим; заранее, что уже позади, не догоняем. */
+fun Reminder.rolled(now: Long): Reminder {
+    if (rule == Rule.NONE || done) return this
+    // Пока идут «отложить» и повторы этого раза — не переходим к следующему.
+    if (snoozeAt.after(now) || nagAt.after(now)) return this
+    var r = this
+    var guard = 0
+    while (r.end() <= now && guard++ < 5000) r = r.copy(at = ms(r.step(Fmt.local(r.at))))
+    return if (r === this) this else r.copy(handledUntil = maxOf(handledUntil, now), snoozeAt = null, nagAt = null, nags = 0)
+}
+
+/** «Готово» у повторяющегося — этот раз закрыт, ждём следующего. */
+fun Reminder.skipped(now: Long): Reminder =
+    copy(at = ms(step(Fmt.local(at)))).rolled(now).copy(handledUntil = now, snoozeAt = null, nagAt = null, nags = 0)
+
 /** Напоминание ещё впереди (событие не прошло, отложено или повторяется). */
-fun Reminder.isActive(now: Long): Boolean = !done && (end() > now || snoozeAt.after(now) || nagAt.after(now))
+fun Reminder.isActive(now: Long): Boolean = !done && (rule != Rule.NONE || end() > now || snoozeAt.after(now) || nagAt.after(now))
 
 /** Под каким временем показывать в списке: отложенное — под временем повтора. */
 fun Reminder.shownAt(now: Long): Long =

@@ -81,6 +81,8 @@ object Store {
                 title = o.getString("title"),
                 at = at,
                 allDay = o.optBoolean("allDay"),
+                rule = Rule.entries.firstOrNull { it.name == o.optString("rule") } ?: Rule.NONE,
+                weekdays = o.optJSONArray("weekdays")?.let { a -> (0 until a.length()).map { a.getInt(it) } } ?: emptyList(),
                 dates = o.optJSONArray("dates")?.let { a -> (0 until a.length()).map { a.getLong(it) } } ?: emptyList(),
                 days = days,
                 dayTime = dayTime,
@@ -110,6 +112,8 @@ object Store {
                     .put("allDay", r.allDay)
                     .put("days", JSONArray(r.days))
                     .put("dates", JSONArray(r.dates))
+                    .put("rule", r.rule.name)
+                    .put("weekdays", JSONArray(r.weekdays))
                     .put("dayTime", r.dayTime)
                     .put("before", JSONArray(r.before))
                     .put("snoozeAt", r.snoozeAt ?: JSONObject.NULL)

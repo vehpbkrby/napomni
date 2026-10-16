@@ -21,9 +21,13 @@ object Scheduler {
         val shown = mutableListOf<Pair<Reminder, Trigger>>()
         Store.update(ctx) { list ->
             list.map { r ->
-                val t = r.dueAt(now) ?: return@map r
-                shown += r to t
-                r.handled(now, t)
+                val t = r.dueAt(now)
+                val h = if (t == null) r else {
+                    shown += r to t
+                    r.handled(now, t)
+                }
+                // Повторяющееся: прошедший раз сменяется следующим.
+                h.rolled(now)
             }
         }
         shown.forEach { (r, t) -> Notifier.show(ctx, r, t, now) }
@@ -77,7 +81,7 @@ object Actions {
     fun handle(ctx: Context, id: Int, action: String?) {
         val now = System.currentTimeMillis()
         when (action) {
-            DONE -> Store.edit(ctx, id) { it.copy(done = true).reacted() }
+            DONE -> Store.edit(ctx, id) { if (it.rule != Rule.NONE) it.skipped(now) else it.copy(done = true).reacted() }
             SNOOZE_10 -> Store.edit(ctx, id) { it.snoozed(now, 10) }
             SNOOZE_60 -> Store.edit(ctx, id) { it.snoozed(now, 60) }
             // Смахнули уведомление — увидели: повторы больше не нужны.
