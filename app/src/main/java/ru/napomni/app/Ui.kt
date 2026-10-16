@@ -378,7 +378,12 @@ fun SheetHeader(step: Int, title: String, onClose: () -> Unit, modifier: Modifie
  * дальше «Вс / 18 окт». Выходные — цветом выходных.
  */
 @Composable
-fun WeekGrid(week: List<LocalDate>, selected: LocalDate?, today: LocalDate, onPick: (LocalDate) -> Unit) {
+fun WeekGrid(week: List<LocalDate>, selected: LocalDate?, today: LocalDate, onPick: (LocalDate) -> Unit) =
+    WeekGrid(week, { it == selected }, today, check = false, onPick = onPick)
+
+/** То же с выбором нескольких дней: у выбранных — ✓. */
+@Composable
+fun WeekGrid(week: List<LocalDate>, isSel: (LocalDate) -> Boolean, today: LocalDate, check: Boolean, onPick: (LocalDate) -> Unit) {
     val p = LocalPal.current
     val brass = isBrass
     val shape = RoundedCornerShape(if (brass) 10.dp else 8.dp)
@@ -386,7 +391,7 @@ fun WeekGrid(week: List<LocalDate>, selected: LocalDate?, today: LocalDate, onPi
         week.withIndex().chunked(4).forEach { row ->
             Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 row.forEach { (i, d) ->
-                    val sel = d == selected
+                    val sel = isSel(d)
                     val en = d >= today
                     val we = isWeekend(d)
                     val wd = Fmt.WEEKDAYS[d.dayOfWeek.value - 1]
@@ -418,7 +423,7 @@ fun WeekGrid(week: List<LocalDate>, selected: LocalDate?, today: LocalDate, onPi
                         verticalArrangement = Arrangement.Center,
                     ) {
                         Text(
-                            top, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, maxLines = 1, softWrap = false,
+                            (if (check && sel) "✓ " else "") + top, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, maxLines = 1, softWrap = false,
                             color = when {
                                 sel -> if (we) p.weekendOnPrimary else p.onPrimary
                                 we -> p.weekend
@@ -447,6 +452,17 @@ fun MonthCalendar(
     month: YearMonth,
     onMonth: (YearMonth) -> Unit,
     selected: LocalDate?,
+    today: LocalDate,
+    marked: Set<LocalDate>,
+    onPick: (LocalDate) -> Unit,
+) = MonthCalendar(month, onMonth, { it == selected }, today, marked, onPick)
+
+/** Календарь с выбором нескольких дней. */
+@Composable
+fun MonthCalendar(
+    month: YearMonth,
+    onMonth: (YearMonth) -> Unit,
+    isSel: (LocalDate) -> Boolean,
     today: LocalDate,
     marked: Set<LocalDate>,
     onPick: (LocalDate) -> Unit,
@@ -482,7 +498,7 @@ fun MonthCalendar(
                     Box(Modifier.weight(1f).height(42.dp), contentAlignment = Alignment.Center) {
                         if (n in 1..days) {
                             val d = month.atDay(n)
-                            DayCell(n, d == selected, d == today, d < today, d in marked, isWeekend(d)) { onPick(d) }
+                            DayCell(n, isSel(d), d == today, d < today, d in marked, isWeekend(d)) { onPick(d) }
                         }
                     }
                 }

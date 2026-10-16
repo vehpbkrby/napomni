@@ -152,4 +152,14 @@ class ModelTest {
         assertEquals(19 * 60, dayTime)
         assertEquals(DEFAULT_DAY_TIME, migrateBefore(listOf(60), event).third)
     }
+
+    @Test fun specificDatesEachRemindAtTheirTime() {
+        val d = listOf(17L, 20L, 23L).map { java.time.LocalDate.of(2026, 10, it.toInt()).toEpochDay() }
+        val r = Reminder(5, "Цветы", ms(23, 0), allDay = true, dates = d, dayTime = 10 * 60 + 30, handledUntil = created)
+        assertEquals(listOf(ms(17, 10, 30), ms(20, 10, 30), ms(23, 10, 30)), r.triggers().map { it.time })
+        // Каждый день — главное срабатывание: будильник, повтор и голос работают для всех.
+        assertTrue(r.triggers().all { r.isMain(it) })
+        assertTrue(r.isActive(ms(23, 20)))
+        assertFalse(r.isActive(ms(24, 0, 1)))
+    }
 }

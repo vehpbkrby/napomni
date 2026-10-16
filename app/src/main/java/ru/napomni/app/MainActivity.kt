@@ -286,7 +286,7 @@ private fun subtitle(r: Reminder, now: Long, past: Boolean): String {
     }
     val early = r.early()
     if (early.isNotEmpty() && r.end() > now) {
-        parts += "заранее: " + early.joinToString(", ") { if (r.shown(it)) "${Fmt.early(it)} ✓" else Fmt.early(it) }
+        parts += (if (r.dates.isNotEmpty()) "дни: " else "заранее: ") + early.joinToString(", ") { if (r.shown(it)) "${Fmt.early(r, it)} ✓" else Fmt.early(r, it) }
     }
     return parts.joinToString(" · ")
 }

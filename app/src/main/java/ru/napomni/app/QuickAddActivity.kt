@@ -133,11 +133,17 @@ class QuickAddActivity : ComponentActivity() {
 }
 
 /** Блоки мастера по порядку заполнения: после выбора в одном подсвечивается следующий. */
-private enum class B { TEXT, QUICK, DAY, TIME, GO1, DAYS, DAYTIME, HOURS, HOW, GO2 }
+private enum class B { TEXT, WHEN, GO1, QUICK, DAY, NOTIFY, DATES, DAYTIME, HOW, GO2 }
 
-/** Время события по умолчанию, когда выбран день: сегодня — следующий час, иначе утро. */
-private fun defaultHour(d: LocalDate, now: LocalDateTime): Int =
-    if (d == now.toLocalDate()) minOf(now.hour + 1, 23) else DEFAULT_DAY_TIME / 60
+/** Как напомнить по времени — выбор шага 1. */
+private enum class Mode(val title: String, val sub: String) {
+    IN("Через", "15 мин, 1 ч, 3 ч… от сейчас"),
+    DAY("В день события", "выбрать день — и, если нужно, заранее"),
+    DATES("В конкретные дни", "отметить несколько любых дней"),
+}
+
+/** «Через» на шаге 2 — до суток. */
+private val QUICK_OPTIONS = IN_OPTIONS + 1440
 
 private fun hm(h: Int, m: Int) = "$h:%02d".format(m)
 
@@ -167,9 +173,19 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
     val start = remember { Fmt.local(System.currentTimeMillis(), zone).toLocalDate() }
     val week = remember(start) { (0..7).map { start.plusDays(it.toLong()) } }
     val editAt = edit?.let { Fmt.local(it.at, zone) }
-    val timed = edit != null && !edit.allDay
 
     var step by remember { mutableIntStateOf(1) }
+    var mode by remember {
+        mutableStateOf(
+            when {
+                edit != null && edit.dates.isNotEmpty() -> Mode.DATES
+                edit != null -> Mode.DAY
+                preset == QuickAddActivity.PRESET_1H || preset == QuickAddActivity.PRESET_3H -> Mode.IN
+                preset == QuickAddActivity.PRESET_DAY || preset == QuickAddActivity.PRESET_DATE -> Mode.DAY
+                else -> null
+            }
+        )
+    }
     // Новое — начинаем с текста; правка — ничего не подсвечиваем, всё уже заполнено.
     var active by remember { mutableStateOf(if (edit == null) B.TEXT else null) }
     val scroll = rememberScrollState()
@@ -216,25 +232,19 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
     var date by remember {
         mutableStateOf(
             when {
-                editAt != null -> editAt.toLocalDate()
+                edit != null && edit.dates.isEmpty() -> editAt?.toLocalDate()
                 // Дата зашита в кнопку виджета; если виджет не успел обновиться после полуночи — не раньше сегодня.
                 preset == QuickAddActivity.PRESET_DAY -> maxOf(day ?: start.plusDays(1), start)
                 else -> null
             }
         )
     }
+    var dates by remember { mutableStateOf(edit?.dates?.map { LocalDate.ofEpochDay(it) }?.toSet() ?: emptySet()) }
     var showCal by remember { mutableStateOf(preset == QuickAddActivity.PRESET_DATE || (date != null && date !in week)) }
-    var allDay by remember { mutableStateOf(edit?.allDay ?: false) }
-    var hour by remember {
-        mutableStateOf(
-            when {
-                timed -> editAt?.hour
-                date != null && edit == null -> defaultHour(date!!, LocalDateTime.now(zone))
-                else -> null
-            }
-        )
+    // Время события — только из текста («врач в 15:30»), по желанию. Без него событие на весь день.
+    var eventTime by remember {
+        mutableStateOf(if (edit != null && !edit.allDay && editAt != null) java.time.LocalTime.of(editAt.hour, editAt.minute) else null)
     }
-    var minute by remember { mutableIntStateOf(if (timed) editAt?.minute ?: 0 else 0) }
     var month by remember { mutableStateOf(YearMonth.from(date ?: start)) }
 
     var days by remember { mutableStateOf(edit?.days?.toSet() ?: emptySet()) }
@@ -269,35 +279,55 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         items.filter { it.isActive(now) && it.id != edit?.id }.map { Fmt.local(it.at, zone).toLocalDate() }.toSet()
     }
 
-    /** Момент события; у «через» — от переданного «сейчас». */
-    fun eventAt(t: Long): Long? {
-        inMin?.let { return t + it * MINUTE }
-        val d = date ?: return null
-        if (allDay) return d.atStartOfDay(zone).toInstant().toEpochMilli()
-        val h = hour ?: return null
-        return d.atTime(h, minute).atZone(zone).toInstant().toEpochMilli()
-    }
-
-    /** Черновик для расчётов шага 2 — та же модель, что сохранится. */
+    /** Черновик — та же модель, что сохранится; null — не хватает выбора. */
     fun draft(t: Long): Reminder? {
-        val at = eventAt(t) ?: return null
-        val quick = inMin != null
-        return Reminder(
-            id = edit?.id ?: 0, title = "", at = at, allDay = !quick && allDay,
-            days = if (quick) emptyList() else days.toList(),
-            dayTime = dayHour * 60 + dayMinute,
-            before = if (quick || allDay) emptyList() else before.toList(),
-            handledUntil = t,
-        )
+        val dt = dayHour * 60 + dayMinute
+        return when (mode) {
+            Mode.IN -> inMin?.let { Reminder(id = 0, title = "", at = t + it * MINUTE, handledUntil = t) }
+            Mode.DAY -> {
+                val d = date ?: return null
+                val et = eventTime
+                if (et == null) Reminder(
+                    id = 0, title = "", at = d.atStartOfDay(zone).toInstant().toEpochMilli(), allDay = true,
+                    days = days.toList(), dayTime = dt, handledUntil = t,
+                ) else Reminder(
+                    id = 0, title = "", at = d.atTime(et).atZone(zone).toInstant().toEpochMilli(),
+                    days = days.toList(), dayTime = dt, before = before.toList(), handledUntil = t,
+                )
+            }
+            Mode.DATES -> {
+                if (dates.isEmpty()) return null
+                Reminder(
+                    id = 0, title = "", at = dates.max().atStartOfDay(zone).toInstant().toEpochMilli(), allDay = true,
+                    dates = dates.map { it.toEpochDay() }.sorted(), dayTime = dt, handledUntil = t,
+                )
+            }
+            null -> null
+        }
     }
 
-    /** Что мешает идти дальше с шага 1, или null. */
-    fun stepOneError(t: Long): String? {
-        if (inMin != null) return null
-        val d = date ?: return "Выберите день"
-        if (allDay) return if (d < Fmt.local(t, zone).toLocalDate()) "Этот день уже прошёл" else null
-        val at = eventAt(t) ?: return "Выберите время или «Без времени»"
-        return if (at <= t) "Это время уже прошло" else null
+    /** Что будет сохранено: только то, что ещё впереди и уместно. */
+    fun cleaned(r: Reminder, t: Long): Reminder = r.copy(
+        days = r.days.filter { r.dayFits(it) && r.dayAt(it) > t }.sorted(),
+        before = r.before.filter { r.at - it * MINUTE > t }.sorted(),
+        dates = r.dates.filter { r.dateAt(it) > t },
+    )
+
+    /** Что мешает сохранить, или null. */
+    fun problem(t: Long): String? {
+        val r = draft(t) ?: return when (mode) {
+            Mode.IN -> "Выберите, через сколько"
+            Mode.DAY -> "Выберите день"
+            Mode.DATES -> "Отметьте хотя бы один день"
+            null -> "Выберите, когда напомнить"
+        }
+        val c = cleaned(r, t)
+        return when {
+            mode == Mode.DAY && !r.allDay && r.at <= t -> "Время события уже прошло"
+            mode == Mode.DAY && r.allDay && date!! < Fmt.local(t, zone).toLocalDate() -> "Этот день уже прошёл"
+            c.triggers().none { it.time > t } -> if (mode == Mode.DATES) "Это время в выбранные дни уже прошло" else "Ни одного напоминания — отметьте, когда напомнить"
+            else -> null
+        }
     }
 
     fun onText(v: TextFieldValue) {
@@ -308,40 +338,31 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         val key = pr.copy(spans = emptyList(), title = "")
         if (key == lastKey) return
         lastKey = key
-        // Новое понятое время из текста выставляет выбор; ручной выбор держится, пока текст не скажет другое.
+        // Понятое из текста выставляет выбор; ручной выбор держится, пока текст не скажет другое.
         val m = pr.minutes
-        val d = pr.date
         if (m != null) {
+            mode = Mode.IN
             inMin = m
-        } else if (d != null) {
-            inMin = null
-            date = d
-            month = YearMonth.from(d)
-            showCal = d !in week
-            pr.time?.let {
-                hour = it.hour
-                minute = it.minute
-                allDay = false
+            return
+        }
+        eventTime = pr.time
+        pr.date?.let { d ->
+            if (mode != Mode.DATES) mode = Mode.DAY
+            if (mode == Mode.DAY) {
+                date = d
+                month = YearMonth.from(d)
+                showCal = d !in week
             }
         }
     }
 
     fun save(): Boolean {
         val t = System.currentTimeMillis()
-        stepOneError(t)?.let {
+        problem(t)?.let {
             error = it
-            step = 1
             return false
         }
-        val r0 = draft(t) ?: return false
-        // Сохраняем только то, что ещё впереди и уместно для события.
-        val d = r0.days.filter { r0.dayFits(it) && r0.dayAt(it) > t }.sorted()
-        val b = r0.before.filter { r0.at - it * MINUTE > t }.sorted()
-        if (r0.allDay && d.isEmpty()) {
-            error = "Выберите хотя бы один день: у события без времени напоминают только дни"
-            step = 2
-            return false
-        }
+        val r0 = cleaned(draft(t) ?: return false, t)
         val title = TimeParser.parse(text.text, LocalDateTime.now(zone)).title.ifBlank { "Напоминание" }
         // Лишние для способа галочки не сохраняем: у «Тихо» нет повтора, у «Вибро» — голоса.
         val rep = repeat && alert != Alert.SILENT
@@ -350,9 +371,7 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         val mel = if (alert == Alert.ALARM) melody else null
         if (alert == Alert.ALARM) Prefs.setLastMelody(ctx, melody)
         Prefs.setLastAlert(ctx, alert)
-        val saved = r0.copy(
-            title = title, days = d, before = b, alert = alert, melody = mel, repeat = rep, speak = voice, flash = fl,
-        )
+        val saved = r0.copy(title = title, alert = alert, melody = mel, repeat = rep, speak = voice, flash = fl)
         if (edit != null) {
             Store.edit(ctx, edit.id) { saved.copy(id = edit.id) }
             Notifier.cancel(ctx, edit.id)
@@ -368,31 +387,27 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         return true
     }
 
-    fun pickDay(d: LocalDate) {
-        date = d
-        inMin = null
-        month = YearMonth.from(d)
-        error = null
-        if (hour == null && !allDay) {
-            hour = defaultHour(d, LocalDateTime.now(zone))
-            minute = 0
-        }
-        go(B.TIME)
+    /** Первый блок шага 2, который надо заполнить. */
+    fun firstOfStep2(): B = when (mode) {
+        Mode.IN -> if (inMin == null) B.QUICK else B.HOW
+        Mode.DAY -> if (date == null) B.DAY else B.NOTIFY
+        Mode.DATES -> B.DATES
+        null -> B.WHEN
     }
 
     fun next() {
-        val t = System.currentTimeMillis()
-        stepOneError(t)?.let {
-            error = it
+        if (mode == null) {
+            error = "Выберите, когда напомнить"
+            go(B.WHEN)
             return
         }
         error = null
-        // У события без времени без дня-напоминания ничего не сработает — сразу предлагаем «в день события».
-        if (inMin == null && allDay && days.isEmpty()) days = setOf(0)
+        // У события без времени без напоминания ничего не сработает — сразу предлагаем «в день события».
+        if (mode == Mode.DAY && eventTime == null && days.isEmpty()) days = setOf(0)
         focus.clearFocus()
         step = 2
         scope.launch { scroll.scrollTo(0) }
-        go(if (inMin != null) B.HOW else B.DAYS)
+        go(firstOfStep2())
     }
 
     fun back() {
@@ -420,6 +435,12 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
 
     // В «латуни» блоки — карточки на бумаге с полями листа; в «изумруде» секции во всю ширину.
     val side = if (brass) 4.dp else 20.dp
+    val title2 = when (mode) {
+        Mode.IN -> "Через сколько"
+        Mode.DAY -> "В день события"
+        Mode.DATES -> "В конкретные дни"
+        null -> "Когда напомнить"
+    }
 
     Box(
         Modifier
@@ -444,20 +465,14 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                     .padding(horizontal = if (brass) 12.dp else 0.dp)
                     .padding(bottom = 14.dp)
             ) {
-                SheetHeader(
-                    step, if (step == 1) "Когда событие" else "Когда напомнить", onClose,
-                    Modifier.padding(horizontal = side),
-                )
+                SheetHeader(step, if (step == 1) "Что напомнить" else title2, onClose, Modifier.padding(horizontal = side))
                 if (step == 1) {
-                    // --- Что напомнить
-                    StepBlock(
-                        if (brass) "Что напомнить" else null, state(B.TEXT, text.text.isNotBlank()),
-                        hint = "что и когда", modifier = Modifier.at(B.TEXT),
-                    ) {
+                    // --- О чём
+                    StepBlock("О чём", state(B.TEXT, text.text.isNotBlank()), hint = "время можно написать", modifier = Modifier.at(B.TEXT)) {
                         val field = @Composable { inner: @Composable () -> Unit ->
                             Box {
                                 if (text.text.isEmpty()) Text(
-                                    "Забрать посылку завтра в 10", fontFamily = displayFont(),
+                                    "Врач, кабинет 12 в 15:30", fontFamily = displayFont(),
                                     fontSize = if (brass) 19.sp else 17.sp, color = p.textSub.copy(alpha = .6f),
                                 )
                                 inner()
@@ -474,15 +489,8 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                             visualTransformation = Highlight(parsed.spans, p.hlBg, p.hlText),
                             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
                             keyboardActions = KeyboardActions(onDone = {
-                                val t = System.currentTimeMillis()
-                                when {
-                                    inMin != null -> if (!save()) focus.clearFocus()
-                                    stepOneError(t) == null -> next()
-                                    else -> {
-                                        focus.clearFocus()
-                                        go(if (date == null) B.DAY else B.TIME)
-                                    }
-                                }
+                                focus.clearFocus()
+                                if (mode == null) go(B.WHEN) else next()
                             }),
                             modifier = Modifier.fillMaxWidth().focusRequester(fr).onFocusChanged { focused = it.isFocused },
                             decorationBox = { inner ->
@@ -497,130 +505,43 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                                     Modifier.clip(RoundedCornerShape(10.dp)).background(p.surfaceVar)
                                         .padding(horizontal = 12.dp, vertical = 9.dp)
                                 ) {
-                                    Text("Что напомнить", fontSize = 12.sp, color = p.textSub)
+                                    Text("О чём", fontSize = 12.sp, color = p.textSub)
                                     field(inner)
                                 }
                             },
                         )
-                        if (parsed.found) Text(
-                            "время понято из текста", fontSize = 12.sp, color = p.accentText,
+                        Text(
+                            when {
+                                parsed.minutes != null -> "понято из текста: через ${Fmt.dur(parsed.minutes!!)}"
+                                eventTime != null -> "время события понято из текста: ${hm(eventTime!!.hour, eventTime!!.minute)}"
+                                else -> "время события можно написать в тексте — «в 15:30», «завтра в 10»; можно не писать"
+                            },
+                            fontSize = 12.sp, color = if (parsed.found) p.accentText else p.textSub,
                             modifier = Modifier.padding(top = 6.dp),
                         )
                     }
 
-                    // --- Через
+                    // --- Когда вам напомнить
                     StepBlock(
-                        "Через", state(B.QUICK, inMin != null),
-                        value = inMin?.let { "через ${Fmt.dur(it)}" }, modifier = Modifier.at(B.QUICK),
+                        "Когда вам напомнить", state(B.WHEN, mode != null), value = mode?.title, hint = "выберите",
+                        modifier = Modifier.at(B.WHEN),
                     ) {
-                        Chips {
-                            IN_OPTIONS.forEach { m ->
-                                Chip(Fmt.dur(m), selected = inMin == m) {
-                                    inMin = if (inMin == m) null else m
-                                    error = null
-                                    go(if (inMin != null) B.GO1 else B.DAY)
-                                }
-                            }
-                            // «через 45 минут» из текста — своей кнопкой.
-                            inMin?.takeIf { it !in IN_OPTIONS }?.let { m -> Chip(Fmt.dur(m), selected = true) { inMin = null } }
-                        }
-                    }
-
-                    // --- День
-                    val dayChosen = inMin == null && date != null
-                    StepBlock(
-                        "День", state(B.DAY, dayChosen),
-                        value = date?.takeIf { dayChosen }?.let { Fmt.dayShort(it, today) }, hint = "выберите день",
-                        modifier = Modifier.at(B.DAY),
-                    ) {
-                        WeekGrid(week, if (inMin == null) date else null, today) { d ->
-                            showCal = false
-                            pickDay(d)
-                        }
-                        val other = date?.takeIf { inMin == null && it !in week }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                other?.let { "Другая дата: ${Fmt.dayShort(it, today)}" } ?: "",
-                                fontSize = 14.sp, color = p.text, modifier = Modifier.weight(1f),
-                            )
-                            LinkButton(if (showCal) "Скрыть календарь" else "Другая дата ›") {
-                                showCal = !showCal
-                                focus.clearFocus()
-                                if (showCal) go(B.DAY)
-                            }
-                        }
-                        if (showCal) MonthCalendar(month, { month = it }, if (inMin == null) date else null, today, marked) { d ->
-                            pickDay(d)
-                        }
-                    }
-
-                    // --- Время события
-                    if (inMin == null) {
-                        val h = hour
-                        StepBlock(
-                            "Время события", state(B.TIME, dayChosen && (allDay || h != null)),
-                            value = if (allDay) "весь день" else h?.let { hm(it, minute) }, hint = "выберите время",
-                            modifier = Modifier.at(B.TIME),
-                        ) {
-                            TimeWheels(
-                                hour = h ?: DEFAULT_DAY_TIME / 60,
-                                minute = minute,
-                                dimmed = allDay || h == null,
-                                onHour = {
-                                    // Час сменили — остаёмся: обычно сразу докручивают минуты.
-                                    hour = it
-                                    allDay = false
-                                    error = null
-                                },
-                                onMinute = {
-                                    if (hour == null) hour = DEFAULT_DAY_TIME / 60
-                                    minute = it
-                                    allDay = false
-                                    error = null
-                                    go(B.GO1)
-                                },
-                            )
-                            Spacer(Modifier.height(10.dp))
-                            Chips {
-                                Chip("Без времени (весь день)", selected = allDay) {
-                                    allDay = !allDay
-                                    error = null
-                                    if (allDay) go(B.GO1)
-                                }
+                        Mode.entries.forEach { m ->
+                            ModeOption(m.title, m.sub, mode == m) {
+                                mode = m
+                                error = null
+                                go(B.GO1)
                             }
                         }
                     }
 
-                    // --- Итог и кнопки
                     Column(Modifier.padding(horizontal = side).at(B.GO1)) {
-                        val problem = error ?: stepOneError(now)
-                        val m = inMin
-                        ResultLine(
-                            AnnotatedString(
-                                when {
-                                    m != null -> "Сработает: ${Fmt.long(now + m * MINUTE, now)}"
-                                    problem != null -> problem
-                                    else -> "Событие: ${draft(now)?.let { Fmt.event(it, now) }}"
-                                }
-                            ),
-                            bad = m == null && (error != null || problem == "Это время уже прошло" || problem == "Этот день уже прошёл"),
-                        )
+                        error?.let { Text(it, fontSize = 14.sp, color = p.error, modifier = Modifier.padding(top = 8.dp)) }
                         Spacer(Modifier.height(8.dp))
-                        if (inMin != null) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                LinkButton("Настроить ›") { next() }
-                                MainButton(
-                                    if (edit != null) "Сохранить" else "Напомнить", Modifier.weight(1f),
-                                    ring = active == B.GO1,
-                                ) { save() }
-                            }
-                        } else {
-                            MainButton("Далее ›", Modifier.fillMaxWidth(), ring = active == B.GO1 && problem == null) { next() }
-                        }
+                        MainButton("Далее ›", Modifier.fillMaxWidth(), ring = active == B.GO1 && mode != null) { next() }
                     }
                 } else {
                     // --- Сводка шага 1
-                    val r0 = draft(now)
                     Box(Modifier.padding(horizontal = side, vertical = 6.dp)) {
                         Row(
                             Modifier
@@ -638,7 +559,11 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                                     color = if (brass) p.onPrimary else p.text, maxLines = 2,
                                 )
                                 Text(
-                                    r0?.let { if (inMin != null) Fmt.long(it.at, now) else Fmt.event(it, now) } ?: "",
+                                    when (mode) {
+                                        Mode.IN -> "через — от сейчас"
+                                        Mode.DATES -> "в выбранные дни"
+                                        else -> eventTime?.let { "событие в ${hm(it.hour, it.minute)}" } ?: "событие без времени"
+                                    },
                                     fontSize = 13.sp, color = if (brass) p.onPrimarySub else p.textSub,
                                 )
                             }
@@ -646,71 +571,139 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                         }
                     }
 
-                    if (inMin == null && r0 != null) {
-                        StepBlock(
-                            "В какие дни", state(B.DAYS, days.isNotEmpty()),
-                            value = if (days.isEmpty()) null else "выбрано ${days.size}", hint = "можно несколько",
-                            modifier = Modifier.at(B.DAYS),
+                    when (mode) {
+                        Mode.IN -> StepBlock(
+                            "Через", state(B.QUICK, inMin != null), value = inMin?.let { Fmt.dur(it) }, hint = "выберите",
+                            modifier = Modifier.at(B.QUICK),
                         ) {
                             Chips {
-                                DAY_OPTIONS.forEach { d ->
-                                    val ok = r0.dayFits(d) && r0.dayAt(d) > now
-                                    Chip(Fmt.dayLabel(d), selected = ok && d in days, enabled = ok, check = true) {
-                                        days = if (d in days) days - d else days + d
+                                QUICK_OPTIONS.forEach { m ->
+                                    Chip(Fmt.dur(m), selected = inMin == m) {
+                                        inMin = m
                                         error = null
-                                        go(B.DAYTIME)
-                                    }
-                                }
-                            }
-                            if (DAY_OPTIONS.any { !(r0.dayFits(it) && r0.dayAt(it) > now) }) Text(
-                                "бледные — уже прошли или позже самого события",
-                                fontSize = 12.sp, color = p.textSub, modifier = Modifier.padding(top = 6.dp),
-                            )
-                        }
-                        StepBlock(
-                            "Во сколько", state(B.DAYTIME, true), value = hm(dayHour, dayMinute), hint = "время напоминаний",
-                            modifier = Modifier.at(B.DAYTIME),
-                        ) {
-                            TimeWheels(
-                                hour = dayHour, minute = dayMinute, rows = 3,
-                                onHour = { dayHour = it },
-                                onMinute = {
-                                    dayMinute = it
-                                    go(if (allDay) B.HOW else B.HOURS)
-                                },
-                            )
-                        }
-                        if (!allDay) StepBlock(
-                            "Перед самим событием", state(B.HOURS, before.isNotEmpty()),
-                            value = before.sorted().joinToString(", ") { Fmt.dur(it) }.ifEmpty { null }, hint = "по желанию",
-                            modifier = Modifier.at(B.HOURS),
-                        ) {
-                            Chips {
-                                BEFORE_OPTIONS.forEach { b ->
-                                    val ok = r0.at - b * MINUTE > now
-                                    Chip(Fmt.before(b), selected = ok && b in before, enabled = ok, check = true) {
-                                        before = if (b in before) before - b else before + b
                                         go(B.HOW)
                                     }
                                 }
+                                // «через 45 минут» из текста — своей кнопкой.
+                                inMin?.takeIf { it !in QUICK_OPTIONS }?.let { m -> Chip(Fmt.dur(m), selected = true) {} }
                             }
                         }
-                        val plan = r0.triggers().filter { it.time > now }
-                        Box(Modifier.padding(horizontal = side)) {
-                            ResultLine(
-                                if (plan.isEmpty()) AnnotatedString("Ни одного напоминания — выберите день") else buildAnnotatedString {
-                                    append("Напомню: ")
-                                    plan.forEachIndexed { i, t ->
-                                        if (i > 0) append(" · ")
-                                        val s = Fmt.compact(t.time, now) + if (t.kind == Kind.EVENT) " (событие)" else ""
-                                        // Выходные — цветом и здесь.
-                                        if (isWeekend(Fmt.local(t.time, zone).toLocalDate())) withStyle(SpanStyle(color = p.weekend)) { append(s) }
-                                        else append(s)
+
+                        Mode.DAY -> {
+                            StepBlock(
+                                "День события", state(B.DAY, date != null),
+                                value = date?.let { Fmt.dayShort(it, today) }, hint = "выберите день", modifier = Modifier.at(B.DAY),
+                            ) {
+                                WeekGrid(week, date, today) { d ->
+                                    date = d
+                                    month = YearMonth.from(d)
+                                    showCal = false
+                                    error = null
+                                    go(B.NOTIFY)
+                                }
+                                val other = date?.takeIf { it !in week }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        other?.let { "Выбрано: ${Fmt.dayShort(it, today)}" } ?: "",
+                                        fontSize = 14.sp, color = p.text, modifier = Modifier.weight(1f),
+                                    )
+                                    LinkButton(if (showCal) "Скрыть календарь" else "Другая дата ›") {
+                                        showCal = !showCal
+                                        if (showCal) go(B.DAY)
                                     }
-                                },
-                                bad = plan.isEmpty(),
-                            )
+                                }
+                                if (showCal) MonthCalendar(month, { month = it }, date, today, marked) { d ->
+                                    date = d
+                                    error = null
+                                    go(B.NOTIFY)
+                                }
+                            }
+                            val r0 = draft(now)
+                            if (r0 != null) {
+                                StepBlock(
+                                    "Напомнить", state(B.NOTIFY, days.isNotEmpty() || before.isNotEmpty()),
+                                    value = "выбрано ${days.size + if (eventTime != null) before.size else 0}", hint = "можно несколько",
+                                    modifier = Modifier.at(B.NOTIFY),
+                                ) {
+                                    Chips {
+                                        (0..3).forEach { d ->
+                                            val ok = r0.dayFits(d) && r0.dayAt(d) > now
+                                            Chip(Fmt.dayLabel(d), selected = ok && d in days, enabled = ok, check = true) {
+                                                days = if (d in days) days - d else days + d
+                                                error = null
+                                                go(B.DAYTIME)
+                                            }
+                                        }
+                                        if (eventTime != null) BEFORE_OPTIONS.forEach { b ->
+                                            val ok = r0.at - b * MINUTE > now
+                                            Chip(Fmt.before(b), selected = ok && b in before, enabled = ok, check = true) {
+                                                before = if (b in before) before - b else before + b
+                                                error = null
+                                            }
+                                        }
+                                    }
+                                    Text(
+                                        if (eventTime != null) "в само время события напомню всегда; «в день» и «за дни» — во время ниже"
+                                        else "событие без времени: напомню в выбранные дни во время ниже",
+                                        fontSize = 12.sp, color = p.textSub, modifier = Modifier.padding(top = 6.dp),
+                                    )
+                                }
+                                if (days.isNotEmpty()) StepBlock(
+                                    "Во сколько", state(B.DAYTIME, true), value = hm(dayHour, dayMinute), hint = "для дней",
+                                    modifier = Modifier.at(B.DAYTIME),
+                                ) {
+                                    TimeWheels(
+                                        hour = dayHour, minute = dayMinute, rows = 3,
+                                        onHour = { dayHour = it },
+                                        onMinute = {
+                                            dayMinute = it
+                                            go(B.HOW)
+                                        },
+                                    )
+                                }
+                            }
                         }
+
+                        Mode.DATES -> {
+                            StepBlock(
+                                "Дни", state(B.DATES, dates.isNotEmpty()),
+                                value = if (dates.isEmpty()) null else "выбрано ${dates.size}", hint = "отметьте несколько",
+                                modifier = Modifier.at(B.DATES),
+                            ) {
+                                val toggle = { d: LocalDate ->
+                                    dates = if (d in dates) dates - d else dates + d
+                                    error = null
+                                }
+                                WeekGrid(week, { it in dates }, today, check = true) { toggle(it) }
+                                val others = dates.filter { it !in week }.sorted()
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        if (others.isEmpty()) "" else "Ещё: " + others.joinToString(", ") { Fmt.dm(it) },
+                                        fontSize = 13.sp, color = p.text, modifier = Modifier.weight(1f),
+                                    )
+                                    LinkButton(if (showCal) "Скрыть календарь" else "Другие даты ›") {
+                                        showCal = !showCal
+                                        if (showCal) go(B.DATES)
+                                    }
+                                }
+                                if (showCal) MonthCalendar(month, { month = it }, { it in dates }, today, marked) { toggle(it) }
+                            }
+                            StepBlock(
+                                "Во сколько", state(B.DAYTIME, true), value = hm(dayHour, dayMinute), hint = "для всех дней",
+                                modifier = Modifier.at(B.DAYTIME),
+                            ) {
+                                TimeWheels(
+                                    hour = dayHour, minute = dayMinute, rows = 3,
+                                    onHour = { dayHour = it },
+                                    onMinute = {
+                                        dayMinute = it
+                                        go(B.HOW)
+                                    },
+                                )
+                            }
+                        }
+
+                        null -> {}
                     }
 
                     StepBlock(
@@ -739,19 +732,34 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                         if (alert != Alert.SILENT) ToggleRow("Повторять каждые $NAG_MIN мин, пока не отвечу", repeat) { repeat = it }
                         if (alert == Alert.SOUND || alert == Alert.ALARM) ToggleRow("Читать вслух", speak) { speak = it }
                         if (alert != Alert.SILENT) ToggleRow("Вспышка", flash) { flash = it }
-                        if (alert == Alert.ALARM && inMin == null) Text(
+                        if (alert == Alert.ALARM && mode == Mode.DAY && eventTime != null) Text(
                             "заранее придёт обычным уведомлением со звуком",
                             fontSize = 12.sp, color = p.textSub, modifier = Modifier.padding(top = 2.dp),
                         )
                     }
 
                     Column(Modifier.padding(horizontal = side).at(B.GO2)) {
-                        error?.let { Text(it, fontSize = 14.sp, color = p.error, modifier = Modifier.padding(top = 8.dp)) }
+                        val r = draft(now)?.let { cleaned(it, now) }
+                        val plan = r?.triggers()?.filter { it.time > now }.orEmpty()
+                        val bad = error ?: problem(now)
+                        ResultLine(
+                            if (bad != null) AnnotatedString(bad) else buildAnnotatedString {
+                                append("Напомню: ")
+                                plan.forEachIndexed { i, t ->
+                                    if (i > 0) append(" · ")
+                                    val s = Fmt.compact(t.time, now) + if (t.kind == Kind.EVENT) " (событие)" else ""
+                                    // Выходные — цветом и здесь.
+                                    if (isWeekend(Fmt.local(t.time, zone).toLocalDate())) withStyle(SpanStyle(color = p.weekend)) { append(s) }
+                                    else append(s)
+                                }
+                            },
+                            bad = bad != null,
+                        )
                         Spacer(Modifier.height(8.dp))
                         Row {
                             SecondButton("‹ Назад", Modifier.weight(1f)) { back() }
                             MainButton(
-                                if (edit != null) "Сохранить" else "Напомнить", Modifier.weight(2f), ring = active == B.GO2,
+                                if (edit != null) "Сохранить" else "Напомнить", Modifier.weight(2f), ring = active == B.GO2 && bad == null,
                             ) { save() }
                         }
                         if (edit != null) LinkButton("Удалить напоминание", Modifier.fillMaxWidth(), color = p.error) {
@@ -776,6 +784,33 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         },
         onClose = { melodyMenu = false },
     )
+}
+
+/** Вариант «Когда вам напомнить»: радио, название и строка-пояснение; выбранный — на основном цвете. */
+@Composable
+private fun ModeOption(title: String, sub: String, selected: Boolean, onClick: () -> Unit) {
+    val p = LocalPal.current
+    val shape = RoundedCornerShape(if (isBrass) 10.dp else 8.dp)
+    Row(
+        Modifier
+            .padding(bottom = 6.dp)
+            .fillMaxWidth()
+            .clip(shape)
+            .background(if (selected) p.primary else if (isBrass) p.surface else p.surfaceVar)
+            .then(if (isBrass && !selected) Modifier.border(1.dp, p.outline, shape) else Modifier)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(18.dp).clip(CircleShape).border(1.5.dp, if (selected) p.onPrimary else p.accent, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) { if (selected) Box(Modifier.size(8.dp).clip(CircleShape).background(if (isBrass) p.accent else p.onPrimary)) }
+        Column(Modifier.padding(start = 12.dp)) {
+            Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = if (selected) p.onPrimary else p.text)
+            Text(sub, fontSize = 12.sp, color = if (selected) p.onPrimarySub else p.textSub)
+        }
+    }
 }
 
 /**

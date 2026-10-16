@@ -46,6 +46,8 @@ data class Reminder(
     val allDay: Boolean = false,
     /** Напоминания по дням: 0 — в день события, N — за N дней; все в [dayTime]. */
     val days: List<Int> = emptyList(),
+    /** «В конкретные дни»: даты (эпоха-дни), каждая в [dayTime]. Тогда [at] — начало последней даты, событие «весь день». */
+    val dates: List<Long> = emptyList(),
     /** Время суток для напоминаний по дням, минуты от полуночи. */
     val dayTime: Int = DEFAULT_DAY_TIME,
     /** За сколько минут до события со временем напомнить ещё. */
@@ -83,7 +85,13 @@ fun Reminder.end(): Long = if (allDay) ms(Fmt.local(at).toLocalDate().plusDays(1
 fun Reminder.dayFits(d: Int): Boolean = allDay || dayAt(d) < at
 
 /** Напоминания заранее (по дням и за часы) — без самого события и повторов. */
+/** Когда сработает напоминание на конкретную дату. */
+fun Reminder.dateAt(epochDay: Long): Long =
+    ms(java.time.LocalDate.ofEpochDay(epochDay).atTime(dayTime / 60, dayTime % 60))
+
 fun Reminder.early(): List<Trigger> {
+    // Конкретные дни: каждое срабатывание — главное (как «в день события»).
+    if (dates.isNotEmpty()) return dates.sorted().map { Trigger(dateAt(it), Kind.DAY, day = 0) }
     val list = days.filter { dayFits(it) }.map { Trigger(dayAt(it), Kind.DAY, day = it) }.toMutableList()
     if (!allDay) list += before.map { Trigger(at - it * MINUTE, Kind.BEFORE, beforeMin = it) }
     return list.sortedBy { it.time }

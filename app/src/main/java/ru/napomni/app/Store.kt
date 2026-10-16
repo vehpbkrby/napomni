@@ -81,6 +81,7 @@ object Store {
                 title = o.getString("title"),
                 at = at,
                 allDay = o.optBoolean("allDay"),
+                dates = o.optJSONArray("dates")?.let { a -> (0 until a.length()).map { a.getLong(it) } } ?: emptyList(),
                 days = days,
                 dayTime = dayTime,
                 before = hours,
@@ -108,6 +109,7 @@ object Store {
                     .put("at", r.at)
                     .put("allDay", r.allDay)
                     .put("days", JSONArray(r.days))
+                    .put("dates", JSONArray(r.dates))
                     .put("dayTime", r.dayTime)
                     .put("before", JSONArray(r.before))
                     .put("snoozeAt", r.snoozeAt ?: JSONObject.NULL)

@@ -139,7 +139,7 @@ class Widget : AppWidgetProvider() {
             val parts = mutableListOf<String>()
             if (r.alert != Alert.SOUND) parts += r.alert.label.lowercase()
             if (r.end() <= now) parts += "отложено"
-            else r.early().filter { !r.shown(it) }.joinToString(", ") { Fmt.early(it) }
+            else r.early().filter { !r.shown(it) }.joinToString(", ") { Fmt.early(r, it) }
                 .takeIf { it.isNotEmpty() }?.let { parts += it }
             return parts.joinToString(" · ")
         }

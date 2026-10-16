@@ -98,7 +98,11 @@ object Fmt {
     }
 
     /** Подпись срабатывания заранее в списке: «за 2 дня», «в день события», «за 1 ч». */
-    fun early(t: Trigger): String = if (t.kind == Kind.DAY) dayLabel(t.day).lowercase() else before(t.beforeMin)
+    fun early(r: Reminder, t: Trigger): String = when {
+        r.dates.isNotEmpty() -> dm(local(t.time).toLocalDate())
+        t.kind == Kind.DAY -> dayLabel(t.day).lowercase()
+        else -> before(t.beforeMin)
+    }
 
     /** «18 окт». */
     fun dm(d: LocalDate) = "${d.dayOfMonth} ${MON[d.monthValue - 1]}"
