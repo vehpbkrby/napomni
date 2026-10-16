@@ -324,12 +324,13 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         null -> false
     }
     val plan = draft(now)?.let { cleaned(it, now) }?.triggers()?.filter { it.time > now }.orEmpty()
-    val ready = textOk && recurOk && whenOk && detailOk && plan.isNotEmpty()
+    val ready = recurOk && whenOk && detailOk && plan.isNotEmpty()
 
     // Какой блок раскрыт: по умолчанию — первый незаполненный; нажатие на свёрнутую строку раскрывает её.
-    var opened by remember { mutableStateOf<B?>(null) }
+    // Новое — поле текста открыто, пока человек пишет: набор букв ничего не сворачивает и не прокручивает.
+    var opened by remember { mutableStateOf<B?>(if (edit == null) B.TEXT else null) }
     val firstOpen = when {
-        !textOk || !recurOk -> B.TEXT
+        !recurOk -> B.TEXT
         !whenOk -> B.WHEN
         !detailOk -> B.DETAIL
         edit == null -> B.HOW
@@ -477,10 +478,8 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                                 cursorBrush = SolidColor(p.accent),
                                 visualTransformation = Highlight(parsed.spans, p.hlBg, p.hlText),
                                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
-                                keyboardActions = KeyboardActions(onDone = {
-                                    focus.clearFocus()
-                                    if (textOk && recurOk) opened = null
-                                }),
+                                // Клавиша ввода только прячет клавиатуру; поле свернётся, когда начнёте работать в следующем блоке.
+                                keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
                                 modifier = Modifier.fillMaxWidth().focusRequester(fr).onFocusChanged { focused = it.isFocused },
                                 decorationBox = { inner ->
                                     Column {
@@ -544,8 +543,9 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                 } else DoneRow(text.text.ifBlank { "О чём" }, eventLine.takeIf { date != null } ?: "без даты") { opened = B.TEXT }
 
                 // ---------- 2. Когда напомнить (только разовое) ----------
-                if (textOk && recurOk && !recurring) {
-                    if (open == B.WHEN) StepBlock("Когда напомнить", BlockState.ACTIVE) {
+                // «Когда напомнить» виден сразу — следующий пункт по умолчанию, пока пишется текст.
+                if (recurOk && !recurring) {
+                    if (open == B.WHEN || (open == B.TEXT && mode == null)) StepBlock("Когда напомнить", BlockState.ACTIVE) {
                         Mode.entries.forEach { m ->
                             ModeOption(m.title, m.sub, mode == m) {
                                 mode = m
@@ -558,7 +558,7 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                 }
 
                 // ---------- 3. Подробности выбранного ----------
-                if (textOk && recurOk && whenOk) {
+                if (recurOk && whenOk && open != B.TEXT) {
                     if (open == B.DETAIL) when (effMode) {
                         Mode.IN -> StepBlock("Через сколько", BlockState.ACTIVE) {
                             Chips {
@@ -629,7 +629,7 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                 }
 
                 // ---------- 4. Как напомнить ----------
-                if (textOk && recurOk && whenOk && detailOk) {
+                if (recurOk && whenOk && detailOk && open != B.TEXT) {
                     if (open == B.HOW) StepBlock("Как напомнить", BlockState.ACTIVE) {
                         Segmented(Alert.entries.map { it.label }, alert.ordinal) { alert = Alert.entries[it] }
                         Spacer(Modifier.height(4.dp))
