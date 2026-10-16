@@ -41,6 +41,8 @@ enum class Alert(val label: String) {
 data class Reminder(
     val id: Int,
     val title: String,
+    /** Картинка — эмодзи из [Pics]; null — подобрать по тексту. */
+    val icon: String? = null,
     /** Момент события, мс от эпохи; у события «весь день» — начало его дня. */
     val at: Long,
     val allDay: Boolean = false,

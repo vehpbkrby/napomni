@@ -100,7 +100,7 @@ object Notifier {
         )
         val b = NotificationCompat.Builder(ctx, channel(alert))
             .setSmallIcon(R.drawable.ic_bell)
-            .setContentTitle(r.title)
+            .setContentTitle("${r.icon ?: Pics.guess(r.title) ?: Pics.DEFAULT} ${r.title}")
             .setContentText(text(r, t, now))
             .setCategory(if (ring) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_REMINDER)
             .setPriority(if (alert == Alert.SILENT) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)

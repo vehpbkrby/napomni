@@ -46,7 +46,7 @@ class FmtTest {
         assertEquals("сегодня, 17:42", Fmt.compact(ms(15, 17, 42), now, zone))
         assertEquals("завтра, 10:00", Fmt.compact(ms(16, 10), now, zone))
         assertEquals("вс 18, 10:00", Fmt.compact(ms(18, 10), now, zone))
-        val allDay = Reminder(1, "ДР", ms(18, 0), allDay = true, handledUntil = now)
+        val allDay = Reminder(1, "ДР", at = ms(18, 0), allDay = true, handledUntil = now)
         assertEquals("вс 18 окт, весь день", Fmt.event(allDay, now, zone))
         assertEquals("вс 18 окт, 19:00", Fmt.event(allDay.copy(allDay = false, at = ms(18, 19)), now, zone))
     }

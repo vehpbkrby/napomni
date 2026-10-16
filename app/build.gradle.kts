@@ -23,8 +23,8 @@ android {
         applicationId = "ru.napomni.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.8"
+        versionCode = 10
+        versionName = "1.9"
     }
 
     signingConfigs {
@@ -73,6 +73,13 @@ android {
     testOptions {
         // org.json в модульных тестах — заглушка Android; хранилище в тестах не трогаем.
         unitTests.isReturnDefaultValues = true
+        // Функциональные тесты (Robolectric): экраны запускаются на JVM, нужны ресурсы приложения.
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            // Образ Android для Robolectric качается один раз в том кэша сборки, а не в одноразовый контейнер.
+            it.systemProperty("maven.repo.local", "/gradle-cache/robolectric-m2")
+            it.maxHeapSize = "1536m"
+        }
     }
 }
 
@@ -88,4 +95,9 @@ dependencies {
 
     // Проверка расчётов без телефона: gradle testReleaseUnitTest
     testImplementation("junit:junit:4.13.2")
+    // Функциональные тесты: действия пользователя на настоящих экранах без телефона.
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.test:core:1.6.1")
+    testImplementation(platform("androidx.compose:compose-bom:2024.11.00"))
+    testImplementation("androidx.compose.ui:ui-test-junit4")
 }

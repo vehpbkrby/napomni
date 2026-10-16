@@ -191,6 +191,9 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
     // --- О чём
     var text by remember { mutableStateOf(TextFieldValue(edit?.title ?: "", TextRange(edit?.title?.length ?: 0))) }
     var focused by remember { mutableStateOf(false) }
+    // Картинка: выбранная вручную или подобранная по тексту.
+    var icon by remember { mutableStateOf(edit?.icon) }
+    var picDialog by remember { mutableStateOf(false) }
     var date by remember {
         mutableStateOf(
             when {
@@ -392,7 +395,7 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         val mel = if (alert == Alert.ALARM) melody else null
         if (alert == Alert.ALARM) Prefs.setLastMelody(ctx, melody)
         Prefs.setLastAlert(ctx, alert)
-        val saved = r0.copy(title = title, alert = alert, melody = mel, repeat = rep, speak = voice, flash = fl)
+        val saved = r0.copy(title = title, icon = icon ?: Pics.guess(text.text), alert = alert, melody = mel, repeat = rep, speak = voice, flash = fl)
         if (edit != null) {
             Store.edit(ctx, edit.id) { saved.copy(id = edit.id) }
             Notifier.cancel(ctx, edit.id)
@@ -406,6 +409,42 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         }
         onClose()
         return true
+    }
+
+    val templates by Templates.flow.collectAsState()
+    LaunchedEffect(Unit) { Templates.all(ctx) }
+
+    /** Заготовка: полная — сразу готовое напоминание; иначе подставить заполненное и спросить дату. */
+    fun useTemplate(t: Template) {
+        val now0 = System.currentTimeMillis()
+        if (t.complete) {
+            var made: Reminder? = null
+            Store.add(ctx) { id -> t.toReminder(id, now0).also { made = it } }
+            Scheduler.run(ctx)
+            made?.triggers()?.firstOrNull { it.time > now0 }?.let {
+                Toast.makeText(ctx, "${t.title}: напомню ${Fmt.compact(it.time, now0)}", Toast.LENGTH_SHORT).show()
+            }
+            onClose()
+            return
+        }
+        onText(TextFieldValue(t.title, TextRange(t.title.length)))
+        icon = t.icon
+        days = t.days.toSet()
+        before = t.before.toSet()
+        dayTime = t.dayTime
+        alert = t.alert
+        nag = t.repeat
+        speak = t.speak
+        flash = t.flash
+        if (t.inMin != null) {
+            mode = Mode.IN
+            inMin = t.inMin
+        } else {
+            mode = Mode.BEFORE
+            if (date == null) dateDialog = true
+        }
+        focus.clearFocus()
+        opened = B.DETAIL
     }
 
     LaunchedEffect(Unit) {
@@ -476,6 +515,8 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                 // ---------- 1. О чём ----------
                 if (open == B.TEXT) StepBlock("О чём", BlockState.ACTIVE) {
                     Row(verticalAlignment = Alignment.Bottom) {
+                        PicBadge(icon ?: Pics.guess(text.text)) { picDialog = true }
+                        Spacer(Modifier.size(10.dp))
                         Box(Modifier.weight(1f)) {
                             BasicTextField(
                                 value = text,
@@ -584,8 +625,9 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                 }
 
                 // ---------- 3. Подробности выбранного ----------
-                // У повторяющегося «за сколько» видно сразу под первым блоком: там ещё выбирают периодичность.
-                val detailBelow = open == B.TEXT && recurring && date != null
+                // Есть дата (кнопкой ▦ или из текста) — «за сколько» видно сразу под полем; первый блок
+                // свернётся, когда начнёте работать здесь.
+                val detailBelow = open == B.TEXT && date != null
                 if (recurOk && whenOk && (open != B.TEXT || detailBelow)) {
                     if (open == B.DETAIL || detailBelow) when (effMode) {
                         Mode.IN -> StepBlock("Через сколько", BlockState.ACTIVE) {
@@ -601,12 +643,21 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                         }
                         Mode.BEFORE -> StepBlock(
                             "За сколько напомнить", BlockState.ACTIVE,
-                            // Начали работать здесь — первый блок сворачивается.
+                            // Начали работать здесь — первый блок сворачивается. Только от нажатия:
+                            // палец сдвинулся (прокрутка) — ничего не трогаем.
                             modifier = Modifier.pointerInput(Unit) {
                                 awaitPointerEventScope {
                                     while (true) {
-                                        awaitPointerEvent(PointerEventPass.Initial)
-                                        if (opened == B.TEXT) opened = B.DETAIL
+                                        val down = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.pressed } ?: continue
+                                        val start = down.position
+                                        var moved = false
+                                        while (true) {
+                                            val e = awaitPointerEvent(PointerEventPass.Initial)
+                                            val c = e.changes.firstOrNull() ?: break
+                                            if ((c.position - start).getDistance() > viewConfiguration.touchSlop) moved = true
+                                            if (!c.pressed) break
+                                        }
+                                        if (!moved && opened == B.TEXT) opened = B.DETAIL
                                     }
                                 }
                             },
@@ -618,6 +669,8 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                                         val ok = r0 != null && (recurring || r0.dayAt(d) > now)
                                         Chip(Fmt.dayLabel(d), selected = d in days, enabled = ok || d in days, check = true) {
                                             days = if (d in days) days - d else days + d
+                                            // Работаем здесь — блок держится открытым до «Готово».
+                                            opened = B.DETAIL
                                         }
                                     }
                                     // Свои «за N дней» — тоже кнопками; нажатие снимает.
@@ -627,6 +680,8 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                                     BEFORE_OPTIONS.forEach { b ->
                                         Chip(Fmt.before(b), selected = b in before, check = true) {
                                             before = if (b in before) before - b else before + b
+                                            // Работаем здесь — блок держится открытым до «Готово».
+                                            opened = B.DETAIL
                                         }
                                     }
                                     before.filter { it !in BEFORE_OPTIONS }.sorted().forEach { b ->
@@ -643,7 +698,11 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                             }
                         }
                         Mode.DATES -> StepBlock("В какие дни", BlockState.ACTIVE) {
-                            val toggle = { d: LocalDate -> dates = if (d in dates) dates - d else dates + d }
+                            // Отмечаем дни — блок держится открытым до «Готово», а не сворачивается после первого.
+                            val toggle = { d: LocalDate ->
+                                dates = if (d in dates) dates - d else dates + d
+                                opened = B.DETAIL
+                            }
                             WeekGrid(week, { it in dates }, today, check = true) { toggle(it) }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 val others = dates.filter { it !in week }.sorted()
@@ -672,7 +731,7 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                 }
 
                 // ---------- 4. Как напомнить ----------
-                if (recurOk && whenOk && detailOk && open != B.TEXT) {
+                if (recurOk && whenOk && detailOk && (open != B.TEXT || detailBelow)) {
                     if (open == B.HOW) StepBlock("Как напомнить", BlockState.ACTIVE) {
                         Segmented(Alert.entries.map { it.label }, alert.ordinal) { alert = Alert.entries[it] }
                         Spacer(Modifier.height(4.dp))
@@ -692,6 +751,7 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                     // ---------- Итог: готовое напоминание ----------
                     Column(Modifier.padding(horizontal = side)) {
                         FinalCard(
+                            icon = icon ?: Pics.guess(text.text),
                             title = parsed.title.ifBlank { text.text.ifBlank { "Напоминание" } },
                             event = if (effMode == Mode.IN || date == null) null else eventLine,
                             plan = plan.map { Fmt.compact(it.time, now) + if (it.kind == Kind.EVENT) " (событие)" else "" },
@@ -709,6 +769,17 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                             AlarmService.stop(ctx, edit.id)
                             Scheduler.run(ctx)
                             onClose()
+                        }
+                    }
+                }
+
+                // ---------- Заготовки: быстрый выбор вместо ручного заполнения ----------
+                if (edit == null && templates.isNotEmpty()) Column(Modifier.padding(horizontal = side).padding(top = 18.dp)) {
+                    BlockLabel("Заготовки", p.accentText, Modifier.padding(bottom = 8.dp))
+                    templates.chunked(2).forEach { row ->
+                        Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            row.forEach { t -> TemplatePlate(t, Modifier.weight(1f)) { useTemplate(t) } }
+                            if (row.size == 1) Spacer(Modifier.weight(1f))
                         }
                     }
                 }
@@ -742,6 +813,10 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         dayTime = it
         timeDialog = null
     }, onClose = { timeDialog = null })
+    if (picDialog) PicPicker(icon ?: Pics.guess(text.text), onPick = {
+        icon = it
+        picDialog = false
+    }, onClose = { picDialog = false })
     if (melodyMenu) MelodyPicker(
         current = melody,
         onPick = { melody = it },
@@ -906,7 +981,7 @@ private fun TimeDialog(title: String, minutes: Int, onDone: (Int) -> Unit, onClo
 
 /** Итог — готовое напоминание: название, событие, все срабатывания (выходные цветом), способ. */
 @Composable
-private fun FinalCard(title: String, event: String?, plan: List<String>, weekend: List<Boolean>, how: String) {
+private fun FinalCard(icon: String?, title: String, event: String?, plan: List<String>, weekend: List<Boolean>, how: String) {
     val p = LocalPal.current
     val brass = isBrass
     Column(
@@ -920,7 +995,10 @@ private fun FinalCard(title: String, event: String?, plan: List<String>, weekend
         val main = if (brass) p.onPrimary else p.text
         val sub = if (brass) p.onPrimarySub else p.textSub
         val hi = if (brass) p.linkOnPrimary else p.accentText
-        Text(title, fontFamily = displayFont(), fontSize = 17.sp, color = main)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PicBadge(icon, 34.dp)
+            Text(title, fontFamily = displayFont(), fontSize = 17.sp, color = main, modifier = Modifier.padding(start = 10.dp))
+        }
         event?.let { Text("событие: $it", fontSize = 12.5.sp, color = sub, modifier = Modifier.padding(top = 4.dp)) }
         Text(
             if (plan.isEmpty()) AnnotatedString("ни одного напоминания впереди") else buildAnnotatedString {

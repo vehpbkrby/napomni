@@ -17,7 +17,7 @@ class ModelTest {
     private val event = ms(18, 19)
 
     // ДР в вс 18 окт 19:00, напомнить за 2 и за 1 день в 19:00.
-    private val r = Reminder(1, "ДР", event, days = listOf(1, 2), dayTime = 19 * 60, handledUntil = created)
+    private val r = Reminder(1, "ДР", at = event, days = listOf(1, 2), dayTime = 19 * 60, handledUntil = created)
 
     // Дни напоминаний считаются в поясе телефона — в тестах это Москва.
     @Before fun tz() = TimeZone.setDefault(TimeZone.getTimeZone(zone))
@@ -120,7 +120,7 @@ class ModelTest {
     }
 
     @Test fun allDayEventRemindsOnlyByDays() {
-        val a = Reminder(2, "ДР", ms(18, 0), allDay = true, days = listOf(0, 1), dayTime = 9 * 60, handledUntil = created)
+        val a = Reminder(2, "ДР", at = ms(18, 0), allDay = true, days = listOf(0, 1), dayTime = 9 * 60, handledUntil = created)
         val t = a.triggers()
         assertEquals(listOf(ms(17, 9), ms(18, 9)), t.map { it.time })
         assertTrue(t.none { it.kind == Kind.EVENT })
@@ -133,13 +133,13 @@ class ModelTest {
     }
 
     @Test fun dayReminderAfterTimedEventIsDropped() {
-        val morning = Reminder(3, "Врач", ms(18, 8), days = listOf(0, 1), dayTime = 9 * 60, handledUntil = created)
+        val morning = Reminder(3, "Врач", at = ms(18, 8), days = listOf(0, 1), dayTime = 9 * 60, handledUntil = created)
         assertFalse(morning.dayFits(0))
         assertEquals(listOf(ms(17, 9)), morning.early().map { it.time })
     }
 
     @Test fun hoursBeforeTimedEvent() {
-        val h = Reminder(4, "Встреча", event, before = listOf(60, 180), handledUntil = created)
+        val h = Reminder(4, "Встреча", at = event, before = listOf(60, 180), handledUntil = created)
         assertEquals(listOf(ms(18, 16), ms(18, 18)), h.early().map { it.time })
         assertTrue(h.copy(allDay = true, at = ms(18, 0)).early().isEmpty())
     }
@@ -155,7 +155,7 @@ class ModelTest {
 
     @Test fun specificDatesEachRemindAtTheirTime() {
         val d = listOf(17L, 20L, 23L).map { java.time.LocalDate.of(2026, 10, it.toInt()).toEpochDay() }
-        val r = Reminder(5, "Цветы", ms(23, 0), allDay = true, dates = d, dayTime = 10 * 60 + 30, handledUntil = created)
+        val r = Reminder(5, "Цветы", at = ms(23, 0), allDay = true, dates = d, dayTime = 10 * 60 + 30, handledUntil = created)
         assertEquals(listOf(ms(17, 10, 30), ms(20, 10, 30), ms(23, 10, 30)), r.triggers().map { it.time })
         // Каждый день — главное срабатывание: будильник, повтор и голос работают для всех.
         assertTrue(r.triggers().all { r.isMain(it) })

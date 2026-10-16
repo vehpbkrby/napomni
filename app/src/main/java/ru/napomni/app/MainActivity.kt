@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -51,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -251,7 +253,10 @@ private fun ReminderRow(r: Reminder, now: Long, past: Boolean, later: Boolean, f
             Modifier.heightIn(min = 64.dp).padding(horizontal = if (brass) 14.dp else 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.width(78.dp)) {
+            Box(Modifier.padding(end = 10.dp).graphicsLayer { alpha = if (past) .55f else 1f }) {
+                PicBadge(r.icon ?: Pics.guess(r.title), 38.dp)
+            }
+            Column(Modifier.width(72.dp)) {
                 if (later) Text(
                     "${Fmt.WEEKDAYS[d.dayOfWeek.value - 1]} ${Fmt.dm(d)}", fontSize = 12.5.sp,
                     color = if (isWeekend(d)) p.weekend else p.textSub, maxLines = 1,
@@ -297,7 +302,10 @@ private fun SettingsScreen(onBack: () -> Unit) {
     val ctx = LocalContext.current
     val p = LocalPal.current
     val look by Prefs.lookFlow(ctx).collectAsState()
-    Column(Modifier.fillMaxSize().background(p.bg).statusBarsPadding().navigationBarsPadding().padding(horizontal = 16.dp)) {
+    Column(
+        Modifier.fillMaxSize().background(p.bg).statusBarsPadding().navigationBarsPadding()
+            .verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 16.dp)
+    ) {
         Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(44.dp).clip(CircleShape).clickable(onClick = onBack), contentAlignment = Alignment.Center) {
                 Icon(Icons.Default.ArrowBack, contentDescription = "Назад", tint = p.text)
@@ -309,7 +317,9 @@ private fun SettingsScreen(onBack: () -> Unit) {
             Prefs.setLook(ctx, l)
             Widget.refresh(ctx)
         } }
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(12.dp))
+        TemplatesSection()
+        Spacer(Modifier.height(20.dp))
         Text(
             "Шрифт PT Serif — ParaType, лицензия SIL Open Font License 1.1.",
             fontSize = 12.sp, color = p.textSub, modifier = Modifier.padding(16.dp),

@@ -837,3 +837,61 @@ class Highlight(private val spans: List<IntRange>, private val bg: Color, privat
     override fun equals(other: Any?) = other is Highlight && other.spans == spans && other.bg == bg && other.fg == fg
     override fun hashCode() = (spans.hashCode() * 31 + bg.hashCode()) * 31 + fg.hashCode()
 }
+
+// ---------- Картинки и заготовки ----------
+
+/** Картинка напоминания: эмодзи на мягкой подложке; [onClick] — сменить. */
+@Composable
+fun PicBadge(emoji: String?, size: Dp = 40.dp, onClick: (() -> Unit)? = null) {
+    val p = LocalPal.current
+    Box(
+        Modifier.size(size).clip(RoundedCornerShape(size * .3f)).background(Pics.tint(emoji, p.dark))
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+        contentAlignment = Alignment.Center,
+    ) { Text(emoji ?: Pics.DEFAULT, fontSize = (size.value * .5f).sp) }
+}
+
+/** Плашка заготовки: картинка, название и что в ней заполнено; у полной — акцентная обводка. */
+@Composable
+fun TemplatePlate(t: Template, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val p = LocalPal.current
+    val shape = RoundedCornerShape(12.dp)
+    Row(
+        modifier.clip(shape).background(p.surface).border(1.dp, if (t.complete) p.accent else p.outlineVar, shape)
+            .clickable(onClick = onClick).padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PicBadge(t.icon, 32.dp)
+        Column(Modifier.padding(start = 8.dp)) {
+            Text(t.title, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, color = p.text, maxLines = 1)
+            Text(t.summary(), fontSize = 11.sp, color = if (t.complete) p.accentText else p.textSub, maxLines = 1)
+        }
+    }
+}
+
+/** Выбор картинки: сетка всего набора. */
+@Composable
+fun PicPicker(current: String?, onPick: (String) -> Unit, onClose: () -> Unit) {
+    val p = LocalPal.current
+    androidx.compose.ui.window.Dialog(onDismissRequest = onClose) {
+        androidx.compose.material3.Surface(shape = RoundedCornerShape(20.dp), color = p.surface) {
+            Column(Modifier.padding(16.dp)) {
+                BlockLabel("Картинка", p.accentText)
+                Spacer(Modifier.height(10.dp))
+                Pics.ALL.chunked(5).forEach { row ->
+                    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        row.forEach { pic ->
+                            Box(
+                                Modifier.weight(1f).then(
+                                    if (pic.emoji == current) Modifier.border(2.dp, p.primary, RoundedCornerShape(14.dp)).padding(3.dp) else Modifier.padding(3.dp)
+                                ),
+                                contentAlignment = Alignment.Center,
+                            ) { PicBadge(pic.emoji, 44.dp) { onPick(pic.emoji) } }
+                        }
+                        repeat(5 - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            }
+        }
+    }
+}

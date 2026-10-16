@@ -20,6 +20,14 @@ object Store {
     private val _flow = MutableStateFlow<List<Reminder>>(emptyList())
     val flow: StateFlow<List<Reminder>> get() = _flow
 
+    /** Для функциональных тестов: забыть прочитанное, чтобы следующий тест начал с чистого листа. */
+    @Synchronized
+    fun resetForTests() {
+        items = null
+        nextId = 1
+        _flow.value = emptyList()
+    }
+
     @Synchronized
     fun all(ctx: Context): List<Reminder> = items ?: load(ctx).also { items = it; _flow.value = it }
 
@@ -79,6 +87,7 @@ object Store {
             Reminder(
                 id = o.getInt("id"),
                 title = o.getString("title"),
+                icon = if (o.isNull("icon")) null else o.optString("icon").ifEmpty { null },
                 at = at,
                 allDay = o.optBoolean("allDay"),
                 rule = Rule.entries.firstOrNull { it.name == o.optString("rule") } ?: Rule.NONE,
@@ -108,6 +117,7 @@ object Store {
                 JSONObject()
                     .put("id", r.id)
                     .put("title", r.title)
+                    .put("icon", r.icon ?: JSONObject.NULL)
                     .put("at", r.at)
                     .put("allDay", r.allDay)
                     .put("days", JSONArray(r.days))

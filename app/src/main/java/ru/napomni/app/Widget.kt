@@ -114,7 +114,7 @@ class Widget : AppWidgetProvider() {
                 }
                 v.setViewVisibility(row, View.VISIBLE)
                 v.setTextViewText(time, Fmt.whenShort(r, now))
-                v.setTextViewText(title, r.title)
+                v.setTextViewText(title, "${r.icon ?: Pics.guess(r.title) ?: Pics.DEFAULT}  ${r.title}")
                 val subText = subtitle(r, now)
                 v.setTextViewText(sub, subText)
                 v.setViewVisibility(sub, if (subText.isEmpty()) View.GONE else View.VISIBLE)
