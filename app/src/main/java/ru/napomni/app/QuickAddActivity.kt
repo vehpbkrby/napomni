@@ -22,6 +22,8 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.PathEffect
@@ -151,7 +153,11 @@ private enum class Mode(val title: String, val sub: String) {
 private val QUICK_OPTIONS = IN_OPTIONS + 1440
 
 /** «За сколько дней»: 0 — в день события. */
-private val DAY_CHOICES = listOf(0, 1, 2, 3, 7)
+private val DAY_CHOICES = listOf(1, 2, 3, 7)
+
+/** Время по умолчанию: у события при выборе даты и у напоминаний «заранее», пока его не задали. */
+private const val NOON = 12 * 60
+private val NOON_TIME: java.time.LocalTime = java.time.LocalTime.of(12, 0)
 
 private fun hm(h: Int, m: Int) = "$h:%02d".format(m)
 private fun hm(t: java.time.LocalTime) = hm(t.hour, t.minute)
@@ -227,7 +233,8 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
             }
         )
     }
-    var days by remember { mutableStateOf(edit?.days?.toSet() ?: emptySet()) }
+    var days by remember { mutableStateOf(edit?.days?.filter { it > 0 }?.toSet() ?: emptySet()) }
+    var customDialog by remember { mutableStateOf(false) }
     var before by remember { mutableStateOf(edit?.before?.toSet() ?: emptySet()) }
     var dates by remember { mutableStateOf(edit?.dates?.map { LocalDate.ofEpochDay(it) }?.toSet() ?: emptySet()) }
     // Время напоминаний по дням: по умолчанию не задано — прочерки, нажать, чтобы поставить.
@@ -279,16 +286,14 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
 
     /** Черновик — та же модель, что сохранится; null — не хватает выбора. */
     fun draft(t: Long): Reminder? {
-        val dt = dayTime ?: DEFAULT_DAY_TIME
+        val dt = dayTime ?: NOON
         return when (effMode) {
             Mode.IN -> inMin?.let { Reminder(id = 0, title = "", at = t + it * MINUTE, handledUntil = t) }
             Mode.BEFORE -> {
                 val d = firstDate(date ?: return null)
-                val et = eventTime
-                val base = if (et == null) Reminder(
-                    id = 0, title = "", at = d.atStartOfDay(zone).toInstant().toEpochMilli(), allDay = true,
-                    days = days.toList(), dayTime = dt, handledUntil = t,
-                ) else Reminder(
+                // У события всегда есть время: при выборе даты ставится 12:00, его можно сменить.
+                val et = eventTime ?: NOON_TIME
+                val base = Reminder(
                     id = 0, title = "", at = d.atTime(et).atZone(zone).toInstant().toEpochMilli(),
                     days = days.toList(), dayTime = dt, before = before.toList(), handledUntil = t,
                 )
@@ -316,11 +321,12 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
     val textOk = text.text.isNotBlank()
     val recurOk = !recurring || (date != null && (rule != Rule.WEEKLY || weekdays.isNotEmpty()))
     val whenOk = recurring || date != null || mode != null
-    val needDayTime = (effMode == Mode.BEFORE && days.isNotEmpty()) || effMode == Mode.DATES
+    val needDayTime = false
     val detailOk = when (effMode) {
         Mode.IN -> inMin != null
-        Mode.BEFORE -> date != null && (days.isNotEmpty() || before.isNotEmpty() || eventTime != null) && (!needDayTime || dayTime != null)
-        Mode.DATES -> dates.isNotEmpty() && dayTime != null
+        // В день события напоминает само событие — «заранее» по желанию; время «заранее» не задано — 12:00.
+        Mode.BEFORE -> date != null
+        Mode.DATES -> dates.isNotEmpty()
         null -> false
     }
     val plan = draft(now)?.let { cleaned(it, now) }?.triggers()?.filter { it.time > now }.orEmpty()
@@ -368,6 +374,7 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
             if (mode == null || mode == Mode.IN) mode = Mode.BEFORE
         }
         pr.time?.let { eventTime = it }
+        if (pr.date != null && eventTime == null) eventTime = NOON_TIME
     }
 
     fun save(): Boolean {
@@ -419,10 +426,10 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
     val whenLine = when (effMode) {
         Mode.IN -> "Через ${inMin?.let { Fmt.dur(it) } ?: "…"}"
         Mode.BEFORE -> buildList {
-            days.sorted().forEach { add(if (it == 0) "в день" else "за ${Fmt.dur(it * 1440)}") }
+            days.sorted().forEach { add("за ${Fmt.dur(it * 1440)}") }
             before.sorted().forEach { add("за ${Fmt.dur(it)}") }
-        }.joinToString(", ").ifEmpty { "в само событие" } + (dayTime?.takeIf { needDayTime }?.let { ", ${hm(it)}" } ?: "")
-        Mode.DATES -> dates.sorted().joinToString(", ") { Fmt.dm(it) } + (dayTime?.let { ", ${hm(it)}" } ?: "")
+        }.joinToString(", ").ifEmpty { "в само событие" } + (if (days.isNotEmpty()) ", ${hm(dayTime ?: NOON)}" else "")
+        Mode.DATES -> dates.sorted().joinToString(", ") { Fmt.dm(it) } + ", ${hm(dayTime ?: NOON)}"
         null -> ""
     }
 
@@ -577,8 +584,10 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                 }
 
                 // ---------- 3. Подробности выбранного ----------
-                if (recurOk && whenOk && open != B.TEXT) {
-                    if (open == B.DETAIL) when (effMode) {
+                // У повторяющегося «за сколько» видно сразу под первым блоком: там ещё выбирают периодичность.
+                val detailBelow = open == B.TEXT && recurring && date != null
+                if (recurOk && whenOk && (open != B.TEXT || detailBelow)) {
+                    if (open == B.DETAIL || detailBelow) when (effMode) {
                         Mode.IN -> StepBlock("Через сколько", BlockState.ACTIVE) {
                             Chips {
                                 QUICK_OPTIONS.forEach { m ->
@@ -590,31 +599,46 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                                 inMin?.takeIf { it !in QUICK_OPTIONS }?.let { m -> Chip(Fmt.dur(m), selected = true) {} }
                             }
                         }
-                        Mode.BEFORE -> StepBlock("За сколько напомнить", BlockState.ACTIVE) {
+                        Mode.BEFORE -> StepBlock(
+                            "За сколько напомнить", BlockState.ACTIVE,
+                            // Начали работать здесь — первый блок сворачивается.
+                            modifier = Modifier.pointerInput(Unit) {
+                                awaitPointerEventScope {
+                                    while (true) {
+                                        awaitPointerEvent(PointerEventPass.Initial)
+                                        if (opened == B.TEXT) opened = B.DETAIL
+                                    }
+                                }
+                            },
+                        ) {
                             if (date == null) LinkButton("Выберите дату события ▦") { dateDialog = true } else {
                                 val r0 = draft(now)
                                 Chips {
                                     DAY_CHOICES.forEach { d ->
-                                        val ok = r0 != null && r0.dayFits(d) && (recurring || r0.dayAt(d) > now)
-                                        Chip(
-                                            if (d == 0) "В день события" else Fmt.dayLabel(d), selected = d in days,
-                                            enabled = ok || d in days, check = true,
-                                        ) { days = if (d in days) days - d else days + d }
+                                        val ok = r0 != null && (recurring || r0.dayAt(d) > now)
+                                        Chip(Fmt.dayLabel(d), selected = d in days, enabled = ok || d in days, check = true) {
+                                            days = if (d in days) days - d else days + d
+                                        }
                                     }
-                                    if (eventTime != null) BEFORE_OPTIONS.forEach { b ->
+                                    // Свои «за N дней» — тоже кнопками; нажатие снимает.
+                                    days.filter { it !in DAY_CHOICES }.sorted().forEach { d ->
+                                        Chip(Fmt.dayLabel(d), selected = true, check = true) { days = days - d }
+                                    }
+                                    BEFORE_OPTIONS.forEach { b ->
                                         Chip(Fmt.before(b), selected = b in before, check = true) {
                                             before = if (b in before) before - b else before + b
                                         }
                                     }
+                                    before.filter { it !in BEFORE_OPTIONS }.sorted().forEach { b ->
+                                        Chip(Fmt.before(b), selected = true, check = true) { before = before - b }
+                                    }
+                                    Chip("+ Своё", selected = false) { customDialog = true }
                                 }
-                                if (eventTime == null) Text(
-                                    "«за 1 / 3 / 6 ч» появятся, если указать время события ▦",
-                                    fontSize = 12.sp, color = p.textSub, modifier = Modifier.padding(top = 4.dp),
-                                ) else Text(
-                                    "в само время события напомню всегда",
+                                Text(
+                                    "в день события напомню в его время — ${hm(eventTime ?: NOON_TIME)}",
                                     fontSize = 12.sp, color = p.textSub, modifier = Modifier.padding(top = 4.dp),
                                 )
-                                if (days.isNotEmpty()) TimeField("Во сколько", dayTime) { timeDialog = "day" }
+                                if (days.isNotEmpty()) TimeField("Во сколько напоминать в эти дни", dayTime ?: NOON) { timeDialog = "day" }
                                 if (detailOk) MainButton("Готово", Modifier.fillMaxWidth().padding(top = 8.dp), height = 44.dp) { opened = null }
                             }
                         }
@@ -630,7 +654,7 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                                 LinkButton(if (calOpen) "Скрыть" else "Календарь ›") { calOpen = !calOpen }
                             }
                             if (calOpen) MonthCalendar(month, { month = it }, { it in dates }, today, marked) { toggle(it) }
-                            TimeField("Во сколько", dayTime) { timeDialog = "day" }
+                            TimeField("Во сколько", dayTime ?: NOON) { timeDialog = "day" }
                             if (detailOk) MainButton("Готово", Modifier.fillMaxWidth().padding(top = 8.dp), height = 44.dp) { opened = null }
                         }
                         null -> {}
@@ -701,11 +725,20 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
             dateDialog = false
             mode = Mode.BEFORE
             // Дата выбрана — работаем уже в следующем блоке: сразу раскрываем «за сколько».
-            opened = B.DETAIL
+            // Дата выбрана — работаем в следующем блоке; у повторяющегося ещё выбирают периодичность здесь же.
+            opened = if (rule != Rule.NONE) B.TEXT else B.DETAIL
         },
         onClose = { dateDialog = false },
     )
-    if (timeDialog != null) TimeDialog("Во сколько напомнить", dayTime ?: DEFAULT_DAY_TIME, onDone = {
+    if (customDialog) CustomBeforeDialog(onAdd = { n, unit ->
+        when (unit) {
+            0 -> before = before + n
+            1 -> before = before + n * 60
+            else -> days = days + n
+        }
+        customDialog = false
+    }, onClose = { customDialog = false })
+    if (timeDialog != null) TimeDialog("Во сколько напомнить", dayTime ?: NOON, onDone = {
         dayTime = it
         timeDialog = null
     }, onClose = { timeDialog = null })
@@ -812,32 +845,42 @@ private fun EventDateDialog(
 ) {
     val p = LocalPal.current
     var d by remember { mutableStateOf(maxOf(date, today)) }
-    var t by remember { mutableStateOf(time) }
+    var t by remember { mutableStateOf(time ?: NOON_TIME) }
     var month by remember { mutableStateOf(YearMonth.from(d)) }
-    var wheel by remember { mutableStateOf(false) }
     Dialog(onDismissRequest = onClose) {
         Surface(shape = RoundedCornerShape(20.dp), color = p.surface) {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
                 BlockLabel("Дата события", p.accentText)
                 MonthCalendar(month, { month = it }, d, today, marked) { d = it }
-                if (wheel) {
-                    TimeWheels(
-                        hour = t?.hour ?: DEFAULT_DAY_TIME / 60, minute = t?.minute ?: 0, rows = 3,
-                        onHour = { t = java.time.LocalTime.of(it, t?.minute ?: 0) },
-                        onMinute = { t = java.time.LocalTime.of(t?.hour ?: DEFAULT_DAY_TIME / 60, it) },
-                    )
-                    Row {
-                        LinkButton("Без времени") {
-                            t = null
-                            wheel = false
-                        }
-                    }
-                } else TimeField("Время события", t?.let { it.hour * 60 + it.minute }) {
-                    if (t == null) t = java.time.LocalTime.of(DEFAULT_DAY_TIME / 60, 0)
-                    wheel = true
-                }
-                if (!wheel) Text("не обязательно", fontSize = 12.sp, color = p.textSub)
+                Text("Время события", fontSize = 13.sp, color = p.textSub, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+                TimeWheels(
+                    hour = t.hour, minute = t.minute, rows = 3,
+                    onHour = { t = java.time.LocalTime.of(it, t.minute) },
+                    onMinute = { t = java.time.LocalTime.of(t.hour, it) },
+                )
                 MainButton("Готово", Modifier.fillMaxWidth().padding(top = 10.dp)) { onDone(d, t) }
+            }
+        }
+    }
+}
+
+/** «+ Своё»: число и единица — минуты, часы или дни до события. */
+@Composable
+private fun CustomBeforeDialog(onAdd: (Int, Int) -> Unit, onClose: () -> Unit) {
+    val p = LocalPal.current
+    var n by remember { mutableIntStateOf(1) }
+    var unit by remember { mutableIntStateOf(2) }
+    Dialog(onDismissRequest = onClose) {
+        Surface(shape = RoundedCornerShape(20.dp), color = p.surface) {
+            Column(Modifier.padding(16.dp)) {
+                BlockLabel("Напомнить заранее за", p.accentText)
+                Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    LinkButton("−") { if (n > 1) n-- }
+                    Text("$n", fontFamily = displayFont(), fontSize = 34.sp, color = p.text, modifier = Modifier.padding(horizontal = 24.dp))
+                    LinkButton("+") { n++ }
+                }
+                Segmented(listOf("минут", "часов", "дней"), unit) { unit = it }
+                MainButton("Добавить", Modifier.fillMaxWidth().padding(top = 12.dp)) { onAdd(n, unit) }
             }
         }
     }
