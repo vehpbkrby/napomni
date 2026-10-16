@@ -395,11 +395,13 @@ fun WeekGrid(week: List<LocalDate>, isSel: (LocalDate) -> Boolean, today: LocalD
                     val en = d >= today
                     val we = isWeekend(d)
                     val wd = Fmt.WEEKDAYS[d.dayOfWeek.value - 1]
-                    val (top, sub) = when (i) {
-                        0 -> "Сегодня" to "${wd.lowercase()} ${d.dayOfMonth}"
-                        1 -> "Завтра" to "${wd.lowercase()} ${d.dayOfMonth}"
-                        2 -> "Послезавтра" to "${wd.lowercase()} ${d.dayOfMonth}"
-                        else -> wd to Fmt.dm(d)
+                    // Сверху всегда день недели и число; снизу — подсказка: сегодня / завтра / послезавтра или месяц.
+                    val top = "$wd ${d.dayOfMonth}"
+                    val sub = when (i) {
+                        0 -> "сегодня"
+                        1 -> "завтра"
+                        2 -> "послезавтра"
+                        else -> Fmt.dm(d).substringAfter(' ')
                     }
                     Column(
                         Modifier
@@ -423,7 +425,8 @@ fun WeekGrid(week: List<LocalDate>, isSel: (LocalDate) -> Boolean, today: LocalD
                         verticalArrangement = Arrangement.Center,
                     ) {
                         Text(
-                            (if (check && sel) "✓ " else "") + top, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, maxLines = 1, softWrap = false,
+                            (if (check && sel) "✓ " else "") + top, fontFamily = displayFont(), fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium, maxLines = 1, softWrap = false,
                             color = when {
                                 sel -> if (we) p.weekendOnPrimary else p.onPrimary
                                 we -> p.weekend
@@ -431,8 +434,7 @@ fun WeekGrid(week: List<LocalDate>, isSel: (LocalDate) -> Boolean, today: LocalD
                             },
                         )
                         Text(
-                            sub, fontFamily = displayFont(), fontSize = if (brass) 15.sp else 14.sp,
-                            fontWeight = if (brass) FontWeight.Normal else FontWeight.Medium, maxLines = 1,
+                            sub, fontSize = 11.sp, maxLines = 1,
                             color = when {
                                 sel -> if (we) p.weekendOnPrimary else p.onPrimarySub
                                 we -> p.weekend

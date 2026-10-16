@@ -266,8 +266,8 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
     }
 
     val recurring = rule != Rule.NONE
-    // У повторяющегося «когда» одно — перед событием.
-    val effMode = if (recurring) Mode.BEFORE else mode
+    // Есть дата события (или повтор) — выбирать «когда» не из чего: только перед событием.
+    val effMode = if (recurring || date != null) Mode.BEFORE else mode
 
     /** Первый раз повторяющегося: для «каждую неделю» по дням — ближайший отмеченный день не раньше даты. */
     fun firstDate(d: LocalDate): LocalDate {
@@ -315,7 +315,7 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
     // Готовность блоков — от неё зависит, что раскрыто.
     val textOk = text.text.isNotBlank()
     val recurOk = !recurring || (date != null && (rule != Rule.WEEKLY || weekdays.isNotEmpty()))
-    val whenOk = recurring || mode != null
+    val whenOk = recurring || date != null || mode != null
     val needDayTime = (effMode == Mode.BEFORE && days.isNotEmpty()) || effMode == Mode.DATES
     val detailOk = when (effMode) {
         Mode.IN -> inMin != null
@@ -433,11 +433,13 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
             .background(Color.Black.copy(alpha = .45f))
             .clickable(remember { MutableInteractionSource() }, null, onClick = onClose)
             .statusBarsPadding(),
-        contentAlignment = Alignment.BottomCenter,
+        // Лист на всю высоту, содержимое от верха: клавиатура прячется — текст остаётся на месте.
+        contentAlignment = Alignment.TopCenter,
     ) {
         Surface(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
+                .padding(top = 12.dp)
                 .imePadding()
                 .clickable(remember { MutableInteractionSource() }, null) {},
             shape = RoundedCornerShape(topStart = if (brass) 22.dp else 18.dp, topEnd = if (brass) 22.dp else 18.dp),
@@ -528,12 +530,29 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                                 Chip(r.label.replaceFirstChar { c -> c.uppercase() }, selected = rule == r) { rule = r }
                             }
                         }
-                        if (rule == Rule.WEEKLY) Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Fmt.WEEKDAYS.forEachIndexed { i, w ->
-                                val n = i + 1
-                                Box(Modifier.weight(1f)) {
-                                    Chip(w, selected = n in weekdays, weekend = n >= 6) {
-                                        weekdays = if (n in weekdays) weekdays - n else weekdays + n
+                        if (rule == Rule.WEEKLY) {
+                            Text("По каким дням недели", fontSize = 13.sp, color = p.textSub, modifier = Modifier.padding(top = 10.dp, bottom = 6.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Fmt.WEEKDAYS.forEachIndexed { i, w ->
+                                    val n = i + 1
+                                    val sel = n in weekdays
+                                    val we = n >= 6
+                                    val shape = RoundedCornerShape(8.dp)
+                                    Box(
+                                        Modifier.weight(1f).height(38.dp).clip(shape)
+                                            .background(if (sel) p.primary else if (isBrass) p.surface else p.surfaceVar)
+                                            .then(if (!sel && isBrass) Modifier.border(1.dp, if (we) p.weekendEdge else p.outline, shape) else Modifier)
+                                            .clickable { weekdays = if (sel) weekdays - n else weekdays + n },
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(
+                                            w, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, softWrap = false,
+                                            color = when {
+                                                sel -> if (we) p.weekendOnPrimary else p.onPrimary
+                                                we -> p.weekend
+                                                else -> p.text
+                                            },
+                                        )
                                     }
                                 }
                             }
@@ -544,7 +563,7 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
 
                 // ---------- 2. Когда напомнить (только разовое) ----------
                 // «Когда напомнить» виден сразу — следующий пункт по умолчанию, пока пишется текст.
-                if (recurOk && !recurring) {
+                if (recurOk && !recurring && date == null) {
                     if (open == B.WHEN || (open == B.TEXT && mode == null)) StepBlock("Когда напомнить", BlockState.ACTIVE) {
                         Mode.entries.forEach { m ->
                             ModeOption(m.title, m.sub, mode == m) {
@@ -680,7 +699,9 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
             eventTime = t
             month = YearMonth.from(d)
             dateDialog = false
-            if (mode == null && !recurring) mode = Mode.BEFORE
+            mode = Mode.BEFORE
+            // Дата выбрана — работаем уже в следующем блоке: сразу раскрываем «за сколько».
+            opened = B.DETAIL
         },
         onClose = { dateDialog = false },
     )
