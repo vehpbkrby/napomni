@@ -114,8 +114,11 @@ private fun Home(resumes: Int, openSettings: () -> Unit) {
     val today = Fmt.local(now, zone).toLocalDate()
     val active = all.filter { it.isActive(now) }.sortedBy { it.shownAt(now) }
     val past = all.filter { !it.isActive(now) }.sortedByDescending { it.at }
-    val groups = active.groupBy { Fmt.dayTitle(Fmt.local(it.shownAt(now), zone).toLocalDate(), today) }
+    // Повторяющиеся внимания не требуют — отдельным свёрнутым списком; разовые — по дням.
+    val (recurring, single) = active.partition { it.rule != Rule.NONE }
+    val groups = single.groupBy { Fmt.dayTitle(Fmt.local(it.shownAt(now), zone).toLocalDate(), today) }
     var showPast by remember { mutableStateOf(false) }
+    var showRecur by remember { mutableStateOf(Prefs.recurOpen(ctx)) }
     var confirmClear by remember { mutableStateOf(false) }
 
     val notifOk = remember(resumes) { Notifier.allowed(ctx) }
@@ -148,7 +151,7 @@ private fun Home(resumes: Int, openSettings: () -> Unit) {
                 if (!exactOk && Build.VERSION.SDK_INT >= 31) add(Triple("Нет разрешения на точное время", "Напоминания будут приходить с опозданием.") {
                     ctx.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${ctx.packageName}")))
                 })
-                if (!fullScreenOk && active.any { it.alert == Alert.ALARM }) add(
+                if (!fullScreenOk && active.any { it.loud }) add(
                     Triple("Будильник не откроется поверх блокировки", "Мелодия зазвучит, но окно с кнопками «Готово» и «Отложить» будет только в шторке.") {
                         ctx.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${ctx.packageName}")))
                     }
@@ -172,6 +175,36 @@ private fun Home(resumes: Int, openSettings: () -> Unit) {
                     RowGroup(brass, side) {
                         list.forEachIndexed { i, r ->
                             ReminderRow(r, now, past = false, later = title == "Позже", first = i == 0) { QuickAddActivity.open(ctx, r.id) }
+                        }
+                    }
+                }
+            }
+            if (recurring.isNotEmpty()) {
+                item(key = "recur") {
+                    Row(
+                        Modifier.padding(horizontal = side).padding(top = 14.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                            .background(if (brass) p.surface else Color.Transparent)
+                            .border(1.dp, p.outlineVar, RoundedCornerShape(12.dp))
+                            .clickable {
+                                showRecur = !showRecur
+                                Prefs.setRecurOpen(ctx, showRecur)
+                            }.padding(horizontal = 14.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("🔁", fontSize = 16.sp)
+                        Text(
+                            "Повторяющиеся (${recurring.size})", fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                            color = p.text, modifier = Modifier.weight(1f).padding(start = 10.dp),
+                        )
+                        Text(if (showRecur) "⌃" else "›", fontSize = 18.sp, color = p.accent)
+                    }
+                }
+                if (showRecur) item(key = "recurlist") {
+                    Box(Modifier.padding(top = 6.dp)) {
+                        RowGroup(brass, side) {
+                            recurring.forEachIndexed { i, r ->
+                                ReminderRow(r, now, past = false, later = true, first = i == 0) { QuickAddActivity.open(ctx, r.id) }
+                            }
                         }
                     }
                 }
@@ -284,7 +317,8 @@ private fun ReminderRow(r: Reminder, now: Long, past: Boolean, later: Boolean, f
 private fun subtitle(r: Reminder, now: Long, past: Boolean): String {
     if (past) return if (r.done) "готово" else ""
     val parts = mutableListOf<String>()
-    if (r.alert != Alert.SOUND) parts += r.alert.label.lowercase()
+    if (r.rule != Rule.NONE) parts += r.rule.label + (if (r.rule == Rule.WEEKLY && r.weekdays.isNotEmpty()) ": " + r.weekdays.sorted().joinToString(", ") { Fmt.WEEKDAYS[it - 1].lowercase() } else "")
+    r.way.shortLabel()?.let { parts += it }
     when {
         r.end() <= now -> parts += "отложено, событие было ${if (r.allDay) Fmt.dayShort(Fmt.local(r.at).toLocalDate()) else Fmt.short(r.at, now)}"
         r.at > now -> parts += "через ${Fmt.approx(((r.at - now) / MINUTE).toInt())}"

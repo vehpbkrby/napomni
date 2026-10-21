@@ -244,11 +244,9 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
     var dayTime by remember { mutableStateOf(edit?.takeIf { it.days.isNotEmpty() || it.dates.isNotEmpty() }?.dayTime) }
 
     // --- Как напомнить
-    var alert by remember { mutableStateOf(edit?.alert ?: Prefs.lastAlert(ctx)) }
+    // Звук, вибрация, вспышка, голос, «как будильник», повтор — в любом сочетании; по умолчанию последний выбор.
+    var way by remember { mutableStateOf(edit?.way ?: Prefs.lastWay(ctx)) }
     var melody by remember { mutableStateOf(if (edit != null) edit.melody else Prefs.lastMelody(ctx)) }
-    var nag by remember { mutableStateOf(edit?.repeat ?: false) }
-    var speak by remember { mutableStateOf(edit?.speak ?: false) }
-    var flash by remember { mutableStateOf(edit?.flash ?: false) }
     var melodyMenu by remember { mutableStateOf(false) }
     val melodyName = remember(melody) { Melody.name(ctx, melody) }
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -389,13 +387,10 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         }
         val title = TimeParser.parse(text.text, LocalDateTime.now(zone)).title.ifBlank { "Напоминание" }
         // Лишние для способа галочки не сохраняем: у «Тихо» нет повтора, у «Вибро» — голоса.
-        val rep = nag && alert != Alert.SILENT
-        val voice = speak && (alert == Alert.SOUND || alert == Alert.ALARM)
-        val fl = flash && alert != Alert.SILENT
-        val mel = if (alert == Alert.ALARM) melody else null
-        if (alert == Alert.ALARM) Prefs.setLastMelody(ctx, melody)
-        Prefs.setLastAlert(ctx, alert)
-        val saved = r0.copy(title = title, icon = icon ?: Pics.guess(text.text), alert = alert, melody = mel, repeat = rep, speak = voice, flash = fl)
+        val mel = if (way.sound || way.loud) melody else null
+        if (way.sound || way.loud) Prefs.setLastMelody(ctx, melody)
+        Prefs.setLastWay(ctx, way)
+        val saved = r0.copy(title = title, icon = icon ?: Pics.guess(text.text), melody = mel).withWay(way)
         if (edit != null) {
             Store.edit(ctx, edit.id) { saved.copy(id = edit.id) }
             Notifier.cancel(ctx, edit.id)
@@ -432,10 +427,7 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         days = t.days.toSet()
         before = t.before.toSet()
         dayTime = t.dayTime
-        alert = t.alert
-        nag = t.repeat
-        speak = t.speak
-        flash = t.flash
+        way = t.way
         if (t.inMin != null) {
             mode = Mode.IN
             inMin = t.inMin
@@ -733,20 +725,13 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                 // ---------- 4. Как напомнить ----------
                 if (recurOk && whenOk && detailOk && (open != B.TEXT || detailBelow)) {
                     if (open == B.HOW) StepBlock("Как напомнить", BlockState.ACTIVE) {
-                        Segmented(Alert.entries.map { it.label }, alert.ordinal) { alert = Alert.entries[it] }
-                        Spacer(Modifier.height(4.dp))
-                        if (alert == Alert.ALARM) {
-                            OptionRow("Мелодия", melodyName) { melodyMenu = true }
-                            if (!Notifier.fullScreenAllowed(ctx)) LinkButton("Разрешить окно поверх блокировки") {
-                                ctx.startActivity(
-                                    Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${ctx.packageName}"))
-                                )
-                            }
+                        WaySection(way, melodyName, onMelody = { melodyMenu = true }) { way = it }
+                        if (way.loud && !Notifier.fullScreenAllowed(ctx)) LinkButton("Разрешить окно поверх блокировки") {
+                            ctx.startActivity(
+                                Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${ctx.packageName}"))
+                            )
                         }
-                        if (alert != Alert.SILENT) ToggleRow("Повторять каждые $NAG_MIN мин, пока не отвечу", nag) { nag = it }
-                        if (alert == Alert.SOUND || alert == Alert.ALARM) ToggleRow("Читать вслух", speak) { speak = it }
-                        if (alert != Alert.SILENT) ToggleRow("Вспышка", flash) { flash = it }
-                    } else DoneRow("Как напомнить", alert.label) { opened = B.HOW }
+                    } else DoneRow("Как напомнить", way.label()) { opened = B.HOW }
 
                     // ---------- Итог: готовое напоминание ----------
                     Column(Modifier.padding(horizontal = side)) {
@@ -756,7 +741,7 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                             event = if (effMode == Mode.IN || date == null) null else eventLine,
                             plan = plan.map { Fmt.compact(it.time, now) + if (it.kind == Kind.EVENT) " (событие)" else "" },
                             weekend = plan.map { isWeekend(Fmt.local(it.time, zone).toLocalDate()) },
-                            how = alert.label.lowercase() + (if (nag) ", повтор" else "") + (if (speak) ", голос" else "") + (if (flash) ", вспышка" else ""),
+                            how = way.label(),
                         )
                         error?.let { Text(it, fontSize = 13.sp, color = p.error, modifier = Modifier.padding(top = 6.dp)) }
                         MainButton(
@@ -1053,7 +1038,7 @@ private fun MelodyPicker(current: String?, onPick: (String?) -> Unit, onFile: ()
     var ringtone by remember { mutableStateOf<Ringtone?>(null) }
     LaunchedEffect(Unit) {
         val list = withContext(Dispatchers.IO) { Melody.alarmTones(ctx) }
-        tones = listOf(Melody.Tone(null, "Будильник телефона")) + list +
+        tones = listOf(Melody.Tone(null, "Как в телефоне")) + list +
             listOfNotNull(current?.takeIf { c -> list.none { it.uri == c } }?.let { Melody.Tone(it, Melody.name(ctx, it)) })
     }
     fun stop() {

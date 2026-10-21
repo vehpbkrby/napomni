@@ -15,8 +15,12 @@ object Prefs {
     fun lastMelody(ctx: Context): String? = p(ctx).getString("lastMelody", null)
     fun setLastMelody(ctx: Context, uri: String?) = p(ctx).edit().putString("lastMelody", uri).apply()
 
-    fun lastAlert(ctx: Context): Alert = Alert.entries.firstOrNull { it.name == p(ctx).getString("lastAlert", null) } ?: Alert.SOUND
-    fun setLastAlert(ctx: Context, a: Alert) = p(ctx).edit().putString("lastAlert", a.name).apply()
+    fun lastWay(ctx: Context): Way = Way.decode(p(ctx).getString("lastWay", null)) ?: Way.fromOld(p(ctx).getString("lastAlert", null))
+    fun setLastWay(ctx: Context, w: Way) = p(ctx).edit().putString("lastWay", w.encode()).apply()
+
+    /** Раскрыт ли список повторяющихся на главном экране. */
+    fun recurOpen(ctx: Context) = p(ctx).getBoolean("recurOpen", false)
+    fun setRecurOpen(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("recurOpen", v).apply()
 
     /** Оформление: поток, чтобы смена в настройках сразу перерисовала открытые экраны. По умолчанию — «латунь». */
     private var look: MutableStateFlow<Look>? = null
@@ -37,7 +41,7 @@ object Melody {
 
     /** Мелодии будильника, что есть в телефоне, — для своего меню выбора. */
     fun alarmTones(ctx: Context): List<Tone> = try {
-        val rm = RingtoneManager(ctx).apply { setType(RingtoneManager.TYPE_ALARM) }
+        val rm = RingtoneManager(ctx).apply { setType(RingtoneManager.TYPE_NOTIFICATION or RingtoneManager.TYPE_ALARM) }
         val c = rm.cursor
         buildList {
             while (c.moveToNext()) add(Tone(rm.getRingtoneUri(c.position).toString(), c.getString(RingtoneManager.TITLE_COLUMN_INDEX)))
@@ -48,7 +52,7 @@ object Melody {
 
     /** Название для строки «Мелодия»: звук телефона — по его названию, свой файл — по имени файла. */
     fun name(ctx: Context, uri: String?): String {
-        if (uri == null) return "Будильник телефона"
+        if (uri == null) return "Как в телефоне"
         val u = Uri.parse(uri)
         return try {
             if (u.authority == "media" || u.authority == "settings") {

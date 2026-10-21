@@ -137,7 +137,7 @@ class Widget : AppWidgetProvider() {
         /** «вибро · за 2 дня, за 1 день» — способ (кроме обычного звука) и то, что ещё впереди. */
         fun subtitle(r: Reminder, now: Long): String {
             val parts = mutableListOf<String>()
-            if (r.alert != Alert.SOUND) parts += r.alert.label.lowercase()
+            r.way.shortLabel()?.let { parts += it }
             if (r.end() <= now) parts += "отложено"
             else r.early().filter { !r.shown(it) }.joinToString(", ") { Fmt.early(r, it) }
                 .takeIf { it.isNotEmpty() }?.let { parts += it }

@@ -24,6 +24,8 @@ object Notifier {
     private const val CH_VIBRATE = "vibrate"
     private const val CH_SILENT = "silent"
     private const val CH_ALARM = "alarm"
+    /** С 2.0: всплывает, но без своего звука — звук, вибрацию и вспышку в любом сочетании играет [AlarmService]. */
+    private const val CH_QUIET = "popup"
 
     fun allowed(ctx: Context): Boolean =
         (Build.VERSION.SDK_INT < 33 ||
@@ -47,6 +49,10 @@ object Notifier {
             enableVibration(true)
         }
         make(CH_SILENT, "Тихо", NotificationManager.IMPORTANCE_LOW, "Только значок в шторке")
+        make(CH_QUIET, "Напоминания (звук от приложения)", NotificationManager.IMPORTANCE_HIGH, "Всплывает; звук, вибрацию и вспышку включают в самом напоминании") {
+            setSound(null, null)
+            enableVibration(false)
+        }
         make(CH_ALARM, "Будильник", NotificationManager.IMPORTANCE_HIGH, "Мелодию играет приложение, пока не нажмёте кнопку") {
             setSound(null, null)
             enableVibration(false)
@@ -54,11 +60,13 @@ object Notifier {
         }
     }
 
-    private fun channel(a: Alert) = when (a) {
-        Alert.SOUND -> CH_SOUND
-        Alert.VIBRATE -> CH_VIBRATE
-        Alert.SILENT -> CH_SILENT
-        Alert.ALARM -> CH_ALARM
+    /** [fallback] — служба не запустилась: звук и вибрацию отдаём каналу Android. */
+    private fun channel(r: Reminder, ring: Boolean, fallback: Boolean) = when {
+        ring -> CH_ALARM
+        fallback && r.sound -> CH_SOUND
+        fallback && r.vibrate -> CH_VIBRATE
+        !r.way.any -> CH_SILENT
+        else -> CH_QUIET
     }
 
     /** Строка под заголовком: когда событие и сколько до него. */
@@ -90,20 +98,19 @@ object Notifier {
         }
     }
 
-    fun build(ctx: Context, r: Reminder, t: Trigger, now: Long, ring: Boolean, quiet: Boolean = false): Notification {
+    fun build(ctx: Context, r: Reminder, t: Trigger, now: Long, ring: Boolean, quiet: Boolean = false, fallback: Boolean = false): Notification {
         channels(ctx)
-        val alert = if (ring) Alert.ALARM else r.alertFor(t).let { if (it == Alert.ALARM) Alert.SOUND else it }
         val open = if (ring) AlarmActivity.pending(ctx, r.id, t.time) else PendingIntent.getActivity(
             ctx, r.id,
             Intent(ctx, MainActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val b = NotificationCompat.Builder(ctx, channel(alert))
+        val b = NotificationCompat.Builder(ctx, channel(r, ring, fallback))
             .setSmallIcon(R.drawable.ic_bell)
             .setContentTitle("${r.icon ?: Pics.guess(r.title) ?: Pics.DEFAULT} ${r.title}")
             .setContentText(text(r, t, now))
             .setCategory(if (ring) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_REMINDER)
-            .setPriority(if (alert == Alert.SILENT) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
+            .setPriority(if (!r.way.any) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
             .setWhen(r.at)
             .setShowWhen(true)
             .setAutoCancel(true)
@@ -128,9 +135,15 @@ object Notifier {
             // Разрешение отозвали между проверкой и показом.
             return
         }
-        when {
-            ring -> AlarmService.start(ctx, r.id, t.time, ring = true)
-            r.effects(t) -> AlarmService.start(ctx, r.id, t.time, ring = false)
+        val started = when {
+            ring -> AlarmService.start(ctx, r.id, t.time, ring = true, main = true)
+            r.effects(t) -> AlarmService.start(ctx, r.id, t.time, ring = false, main = r.isMain(t))
+            else -> true
+        }
+        // Android не дал запустить службу (бывает сразу после загрузки) — пусть хотя бы канал прозвонит.
+        if (!started && !ring && (r.sound || r.vibrate)) try {
+            NotificationManagerCompat.from(ctx).notify(r.id, build(ctx, r, t, now, ring = false, fallback = true))
+        } catch (_: SecurityException) {
         }
     }
 

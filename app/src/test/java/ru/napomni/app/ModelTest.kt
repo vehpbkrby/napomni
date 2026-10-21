@@ -89,7 +89,7 @@ class ModelTest {
         val rep = r.copy(repeat = true)
         val early = rep.dueAt(ms(16, 19))!!
         assertNull(rep.handled(ms(16, 19), early).nagAt)
-        val silent = r.copy(repeat = true, alert = Alert.SILENT, handledUntil = ms(17, 19))
+        val silent = r.copy(repeat = true, sound = false, vibrate = false, handledUntil = ms(17, 19))
         assertNull(silent.handled(event, silent.dueAt(event)!!).nagAt)
     }
 
@@ -102,10 +102,11 @@ class ModelTest {
     }
 
     @Test fun alarmRingsOnlyForFreshEvent() {
-        val a = r.copy(alert = Alert.ALARM)
+        val a = r.copy(loud = true)
         val early = Trigger(ms(17, 19), Kind.DAY, day = 1)
-        assertEquals(Alert.SOUND, a.alertFor(early))
+        // Заранее «как будильник» не звенит — приходит звуком и вибрацией, как выбрано.
         assertFalse(a.rings(early, ms(17, 19)))
+        assertTrue(a.effects(early))
         val ev = Trigger(event, Kind.EVENT)
         assertTrue(a.rings(ev, event + MINUTE))
         // Телефон был выключен: про событие часовой давности — уведомлением, без звона.
@@ -114,9 +115,11 @@ class ModelTest {
 
     @Test fun effectsOnlyForMain() {
         val v = r.copy(speak = true)
-        assertFalse(v.effects(Trigger(ms(17, 19), Kind.DAY, day = 1)))
-        assertTrue(v.effects(Trigger(event, Kind.EVENT)))
-        assertFalse(v.copy(alert = Alert.SILENT).effects(Trigger(event, Kind.EVENT)))
+        val quiet = v.copy(sound = false, vibrate = false)
+        // Без звука и вибрации голос нужен только у главного срабатывания.
+        assertFalse(quiet.effects(Trigger(ms(17, 19), Kind.DAY, day = 1)))
+        assertTrue(quiet.effects(Trigger(event, Kind.EVENT)))
+        assertFalse(quiet.copy(speak = false).effects(Trigger(event, Kind.EVENT)))
     }
 
     @Test fun allDayEventRemindsOnlyByDays() {
@@ -129,7 +132,7 @@ class ModelTest {
         assertTrue(a.isActive(ms(18, 23)))
         assertFalse(a.isActive(ms(19, 0, 1)))
         // Будильник у «весь день» звенит в сам день, а не накануне.
-        assertTrue(a.copy(alert = Alert.ALARM).rings(t[1], ms(18, 9)))
+        assertTrue(a.copy(loud = true).rings(t[1], ms(18, 9)))
     }
 
     @Test fun dayReminderAfterTimedEventIsDropped() {
@@ -161,5 +164,16 @@ class ModelTest {
         assertTrue(r.triggers().all { r.isMain(it) })
         assertTrue(r.isActive(ms(23, 20)))
         assertFalse(r.isActive(ms(24, 0, 1)))
+    }
+
+    @Test fun wayFromOldAndPresets() {
+        assertEquals(Way(sound = false, vibrate = true), Way.fromOld("VIBRATE"))
+        assertEquals(Way(sound = true, vibrate = true, loud = true), Way.fromOld("ALARM"))
+        assertEquals(Preset.NORMAL.way, Way.fromOld("SOUND"))
+        val w = Way(sound = true, vibrate = false, flash = true, speak = true)
+        assertEquals(w, Way.decode(w.encode()))
+        assertEquals("звук · вспышка · голос", w.label())
+        assertEquals(null, Preset.NORMAL.way.shortLabel())
+        assertEquals("тихо", Preset.QUIET.way.label())
     }
 }

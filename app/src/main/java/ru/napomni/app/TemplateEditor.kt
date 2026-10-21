@@ -92,10 +92,7 @@ private fun TemplateEditor(t: Template, onSave: (Template) -> Unit, onDelete: ()
     var inMin by remember { mutableStateOf(t.inMin ?: 3) }
     var days by remember { mutableStateOf(t.days.toSet()) }
     var before by remember { mutableStateOf(t.before.toSet()) }
-    var alert by remember { mutableStateOf(t.alert) }
-    var nag by remember { mutableStateOf(t.repeat) }
-    var speak by remember { mutableStateOf(t.speak) }
-    var flash by remember { mutableStateOf(t.flash) }
+    var way by remember { mutableStateOf(t.way) }
     var picDialog by remember { mutableStateOf(false) }
     Dialog(onDismissRequest = onClose) {
         Surface(shape = RoundedCornerShape(20.dp), color = p.surface) {
@@ -137,10 +134,7 @@ private fun TemplateEditor(t: Template, onSave: (Template) -> Unit, onDelete: ()
                     }
                 }
                 Text("Как напомнить", fontSize = 13.sp, color = p.textSub, modifier = Modifier.padding(top = 14.dp, bottom = 6.dp))
-                Segmented(Alert.entries.map { it.label }, alert.ordinal) { alert = Alert.entries[it] }
-                if (alert != Alert.SILENT) ToggleRow("Повторять каждые $NAG_MIN мин, пока не отвечу", nag) { nag = it }
-                if (alert == Alert.SOUND || alert == Alert.ALARM) ToggleRow("Читать вслух", speak) { speak = it }
-                if (alert != Alert.SILENT) ToggleRow("Вспышка", flash) { flash = it }
+                WaySection(way, "как в телефоне", onMelody = {}) { way = it }
                 Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (t.id != 0) LinkButton("Удалить", color = p.error) { onDelete() }
                     MainButton("Сохранить", Modifier.weight(1f), enabled = title.isNotBlank()) {
@@ -150,7 +144,7 @@ private fun TemplateEditor(t: Template, onSave: (Template) -> Unit, onDelete: ()
                                 inMin = if (quick) inMin else null,
                                 days = if (quick) emptyList() else days.sorted(),
                                 before = if (quick) emptyList() else before.sorted(),
-                                alert = alert, repeat = nag, speak = speak, flash = flash,
+                                way = way,
                             )
                         )
                     }

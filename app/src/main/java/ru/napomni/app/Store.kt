@@ -99,7 +99,10 @@ object Store {
                 snoozeAt = if (o.isNull("snoozeAt")) null else o.getLong("snoozeAt"),
                 handledUntil = o.getLong("handled"),
                 done = o.optBoolean("done"),
-                alert = Alert.entries.firstOrNull { it.name == o.optString("alert") } ?: Alert.SOUND,
+                // До 2.0 способ был один из четырёх (alert) — переносим в признаки.
+                sound = if (o.has("sound")) o.optBoolean("sound") else Way.fromOld(o.optString("alert")).sound,
+                vibrate = if (o.has("vibrate")) o.optBoolean("vibrate") else Way.fromOld(o.optString("alert")).vibrate,
+                loud = if (o.has("loud")) o.optBoolean("loud") else Way.fromOld(o.optString("alert")).loud,
                 melody = if (o.isNull("melody")) null else o.optString("melody").ifEmpty { null },
                 repeat = o.optBoolean("repeat"),
                 speak = o.optBoolean("speak"),
@@ -129,7 +132,9 @@ object Store {
                     .put("snoozeAt", r.snoozeAt ?: JSONObject.NULL)
                     .put("handled", r.handledUntil)
                     .put("done", r.done)
-                    .put("alert", r.alert.name)
+                    .put("sound", r.sound)
+                    .put("vibrate", r.vibrate)
+                    .put("loud", r.loud)
                     .put("melody", r.melody ?: JSONObject.NULL)
                     .put("repeat", r.repeat)
                     .put("speak", r.speak)

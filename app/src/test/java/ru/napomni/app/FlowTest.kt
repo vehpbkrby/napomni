@@ -6,6 +6,8 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -178,5 +180,42 @@ class FlowTest {
         val t = Templates.all(ctx).single { it.title == "Вынести мусор" }
         assertEquals(30, t.inMin)
         assertTrue(t.complete)
+    }
+
+    @Test
+    fun alertTogglesCombineFreely() {
+        openNew()
+        type("Забрать посылку")
+        tap("Через")
+        tap("30 мин")
+        // Как напомнить: набор «Тихо», затем включаем только вибрацию и вспышку.
+        tap("Тихо")
+        tap("Вибрация")
+        tap("Вспышка")
+        rule.onNodeWithText("Свои").assertExists()
+        tap("Напомнить")
+        val r = saved().single()
+        assertEquals(Way(sound = false, vibrate = true, flash = true), r.way)
+    }
+
+    @Test
+    fun recurringFoldedOnMainScreen() {
+        Store.add(ctx) { id ->
+            Reminder(id, "Оплатить интернет", at = System.currentTimeMillis() + 86_400_000, rule = ru.napomni.app.Rule.MONTHLY, handledUntil = System.currentTimeMillis())
+        }
+        Store.add(ctx) { id -> Reminder(id, "Чайник", at = System.currentTimeMillis() + 600_000, handledUntil = System.currentTimeMillis()) }
+        scenario = ActivityScenario.launch<MainActivity>(Intent(ctx, MainActivity::class.java))
+        rule.waitForIdle()
+        // Список ленивый — сперва докрутить до строки, потом проверять.
+        val list = rule.onNode(hasScrollAction())
+        // Разовое видно сразу, повторяющееся — под свёрнутой строкой.
+        list.performScrollToNode(hasText("Чайник"))
+        rule.onNodeWithText("Чайник").assertExists()
+        list.performScrollToNode(hasText("Повторяющиеся (1)"))
+        rule.onNodeWithText("Оплатить интернет").assertDoesNotExist()
+        rule.onNodeWithText("Повторяющиеся (1)").performSemanticsAction(SemanticsActions.OnClick)
+        rule.waitForIdle()
+        list.performScrollToNode(hasText("Оплатить интернет"))
+        rule.onNodeWithText("Оплатить интернет").assertExists()
     }
 }

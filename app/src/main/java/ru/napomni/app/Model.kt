@@ -30,14 +30,6 @@ const val DEFAULT_DAY_TIME = 9 * 60
  */
 const val RING_FRESH_MS = 10 * MINUTE
 
-/** Как напомнить. Порядок — порядок кнопок в листе. */
-enum class Alert(val label: String) {
-    SOUND("Звук"),
-    VIBRATE("Вибро"),
-    SILENT("Тихо"),
-    ALARM("Будильник"),
-}
-
 data class Reminder(
     val id: Int,
     val title: String,
@@ -62,7 +54,10 @@ data class Reminder(
     /** Все срабатывания с моментом не позже этого уже показаны (или прошли до создания напоминания). */
     val handledUntil: Long,
     val done: Boolean = false,
-    val alert: Alert = Alert.SOUND,
+    /** Как напомнить — признаки в любом сочетании, см. [Way]. */
+    val sound: Boolean = true,
+    val vibrate: Boolean = true,
+    val loud: Boolean = false,
     /** Мелодия будильника (content://…); null — будильник телефона по умолчанию. */
     val melody: String? = null,
     val repeat: Boolean = false,
@@ -140,7 +135,7 @@ fun Reminder.nextTrigger(): Trigger? = triggers().firstOrNull { it.time > handle
 fun Reminder.handled(now: Long, shown: Trigger): Reminder {
     val base = copy(handledUntil = maxOf(now, shown.time))
     val main = isMain(shown)
-    val again = repeat && alert != Alert.SILENT && main && nags < NAG_MAX
+    val again = repeat && (sound || vibrate || flash || speak || loud) && main && nags < NAG_MAX
     return when {
         again -> base.copy(nagAt = now + NAG_MIN * MINUTE, nags = nags + 1)
         !main -> base
@@ -154,14 +149,14 @@ fun Reminder.reacted(): Reminder = copy(nagAt = null, nags = 0)
 fun Reminder.snoozed(now: Long, min: Int): Reminder =
     copy(snoozeAt = now + min * MINUTE, nagAt = null, nags = 0, done = false)
 
-/** Способ для конкретного срабатывания: заранее будильником не звенит — приходит обычным звуком. */
-fun Reminder.alertFor(t: Trigger): Alert = if (!isMain(t) && alert == Alert.ALARM) Alert.SOUND else alert
+/** Звенеть «как будильник»: только главное срабатывание и только свежее. */
+fun Reminder.rings(t: Trigger, now: Long): Boolean = loud && isMain(t) && now - t.time < RING_FRESH_MS
 
-/** Звенеть будильником сейчас. */
-fun Reminder.rings(t: Trigger, now: Long): Boolean = alertFor(t) == Alert.ALARM && now - t.time < RING_FRESH_MS
-
-/** Голос и вспышка — только у главного срабатывания. */
-fun Reminder.effects(t: Trigger): Boolean = isMain(t) && (speak || flash) && alert != Alert.SILENT
+/**
+ * Нужна служба: звук и вибрацию играет само приложение (канал уведомления — тихий), голос и вспышка —
+ * только у главного срабатывания.
+ */
+fun Reminder.effects(t: Trigger): Boolean = sound || vibrate || (isMain(t) && (speak || flash))
 
 private fun Long?.after(now: Long) = this != null && this > now
 

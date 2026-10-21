@@ -44,6 +44,8 @@ class AlarmService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val id = intent?.getIntExtra(EXTRA_ID, -1) ?: -1
         val ring = intent?.getBooleanExtra(EXTRA_RING, false) ?: false
+        // Голос и вспышка — только у главного срабатывания; «заранее» — звук и вибрация, как выбрано.
+        val main = intent?.getBooleanExtra(EXTRA_MAIN, true) ?: true
         val r = Store.get(this, id)
         if (r == null) {
             stopSelf()
@@ -75,12 +77,23 @@ class AlarmService : Service() {
             if (r.flash) blink(-1)
             handler.postDelayed({ finish() }, RING_MS)
         } else {
-            // Сначала страховочный срок: голос или фонарик могут не ответить.
+            // Сначала страховочный срок: мелодия, голос или фонарик могут не ответить.
             handler.postDelayed({ finish() }, 20_000)
-            var left = (if (r.speak) 1 else 0) + (if (r.flash) 1 else 0)
+            val voice = r.speak && main
+            val fl = r.flash && main
+            var left = (if (r.sound || voice) 1 else 0) + (if (r.vibrate) 1 else 0) + (if (fl) 1 else 0)
             val one = { if (--left == 0) finish() }
-            if (r.speak) speak(r.title, alarm = false, then = one)
-            if (r.flash) blink(FLASHES, then = one)
+            // Звук и голос — по очереди: сначала мелодия уведомления, потом текст вслух.
+            val talk = { if (voice) speak(r.title, alarm = false, then = one) else one() }
+            if (r.sound) playOnce(r) { talk() } else if (voice) talk()
+            if (r.vibrate) {
+                vibrator = vibrator().also {
+                    @Suppress("DEPRECATION")
+                    it.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 450, 250, 450), -1), attrs(alarm = false))
+                }
+                handler.postDelayed({ one() }, 1_400)
+            }
+            if (fl) blink(FLASHES, then = one)
             if (left == 0) finish()
         }
         return START_NOT_STICKY
@@ -91,18 +104,59 @@ class AlarmService : Service() {
         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
         .build()
 
+    /** «Как будильник»: мелодия по кругу (если включён звук) и вибрация по кругу (если включена). */
     private fun startRinging(r: Reminder) {
-        val candidates = listOfNotNull(
-            r.melody?.let { Uri.parse(it) },
-            Settings.System.DEFAULT_ALARM_ALERT_URI,
-            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
-            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
-        )
-        player = candidates.firstNotNullOfOrNull { play(it) }
-        vibrator = vibrator().also {
+        if (r.sound) {
+            val candidates = listOfNotNull(
+                r.melody?.let { Uri.parse(it) },
+                Settings.System.DEFAULT_ALARM_ALERT_URI,
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
+            )
+            player = candidates.firstNotNullOfOrNull { play(it) }
+        }
+        if (r.vibrate) vibrator = vibrator().also {
             @Suppress("DEPRECATION")
             it.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 800, 700), 0), attrs(alarm = true))
         }
+    }
+
+    /** Обычный звук: мелодия один раз на громкости уведомлений; [then] — когда доиграла (или не вышло). */
+    private fun playOnce(r: Reminder, done: () -> Unit) {
+        // Конец мелодии и страховочный обрыв могут прийти оба — сообщаем один раз.
+        var called = false
+        val then = {
+            if (!called) {
+                called = true
+                done()
+            }
+        }
+        val candidates = listOfNotNull(
+            r.melody?.let { Uri.parse(it) },
+            Settings.System.DEFAULT_NOTIFICATION_URI,
+            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
+        )
+        for (uri in candidates) {
+            val mp = MediaPlayer()
+            try {
+                mp.setAudioAttributes(attrs(alarm = false))
+                mp.setDataSource(this, uri)
+                mp.isLooping = false
+                mp.setOnCompletionListener { handler.post(then) }
+                mp.prepare()
+                mp.start()
+                player = mp
+                // Длинную мелодию обрываем через 8 с — это уведомление, не будильник.
+                handler.postDelayed({
+                    if (player === mp) try { mp.stop() } catch (_: Exception) {}
+                    then()
+                }, 8_000)
+                return
+            } catch (e: Exception) {
+                mp.release()
+            }
+        }
+        then()
     }
 
     private fun play(uri: Uri): MediaPlayer? {
@@ -237,6 +291,7 @@ class AlarmService : Service() {
         private const val EXTRA_ID = "id"
         private const val EXTRA_RING = "ring"
         private const val EXTRA_AT = "at"
+        private const val EXTRA_MAIN = "main"
         const val RING_MS = 60_000L
         private const val FLASHES = 8
 
@@ -245,13 +300,16 @@ class AlarmService : Service() {
         var ringing: Int? = null
             private set
 
-        fun start(ctx: Context, id: Int, at: Long, ring: Boolean) {
+        /** false — Android не дал запустить (запрет запуска из фона): звук отдаст канал уведомления. */
+        fun start(ctx: Context, id: Int, at: Long, ring: Boolean, main: Boolean = true): Boolean {
             val i = Intent(ctx, AlarmService::class.java)
-                .putExtra(EXTRA_ID, id).putExtra(EXTRA_RING, ring).putExtra(EXTRA_AT, at)
-            try {
+                .putExtra(EXTRA_ID, id).putExtra(EXTRA_RING, ring).putExtra(EXTRA_AT, at).putExtra(EXTRA_MAIN, main)
+            return try {
                 ContextCompat.startForegroundService(ctx, i)
+                true
             } catch (e: Exception) {
-                // Запуск из фона запрещён — звон начнёт экран будильника, когда откроется.
+                // Запуск из фона запрещён — будильник начнёт звенеть экран будильника, когда откроется.
+                false
             }
         }
 
