@@ -102,6 +102,8 @@ object Store {
                 // До 2.0 способ был один из четырёх (alert) — переносим в признаки.
                 sound = if (o.has("sound")) o.optBoolean("sound") else Way.fromOld(o.optString("alert")).sound,
                 vibrate = if (o.has("vibrate")) o.optBoolean("vibrate") else Way.fromOld(o.optString("alert")).vibrate,
+                // До 2.1 голос читал сразу — так и оставляем у старых напоминаний.
+                speakAuto = if (o.has("speakAuto")) o.optBoolean("speakAuto") else o.optBoolean("speak"),
                 loud = if (o.has("loud")) o.optBoolean("loud") else Way.fromOld(o.optString("alert")).loud,
                 melody = if (o.isNull("melody")) null else o.optString("melody").ifEmpty { null },
                 repeat = o.optBoolean("repeat"),
@@ -135,6 +137,7 @@ object Store {
                     .put("sound", r.sound)
                     .put("vibrate", r.vibrate)
                     .put("loud", r.loud)
+                    .put("speakAuto", r.speakAuto)
                     .put("melody", r.melody ?: JSONObject.NULL)
                     .put("repeat", r.repeat)
                     .put("speak", r.speak)

@@ -46,6 +46,7 @@ class AlarmService : Service() {
         val ring = intent?.getBooleanExtra(EXTRA_RING, false) ?: false
         // Голос и вспышка — только у главного срабатывания; «заранее» — звук и вибрация, как выбрано.
         val main = intent?.getBooleanExtra(EXTRA_MAIN, true) ?: true
+        val onlySpeak = intent?.getBooleanExtra(EXTRA_SPEAK, false) ?: false
         val r = Store.get(this, id)
         if (r == null) {
             stopSelf()
@@ -73,13 +74,19 @@ class AlarmService : Service() {
             .apply { acquire(RING_MS + 30_000) }
 
         if (ring) {
-            if (r.speak) speak(r.title, alarm = true) { startRinging(r) } else startRinging(r)
+            if (r.speak && r.speakAuto) speak(r.title, alarm = true) { startRinging(r) } else startRinging(r)
             if (r.flash) blink(-1)
             handler.postDelayed({ finish() }, RING_MS)
         } else {
             // Сначала страховочный срок: мелодия, голос или фонарик могут не ответить.
             handler.postDelayed({ finish() }, 20_000)
-            val voice = r.speak && main
+            // «Прочитать» из уведомления — только голос; иначе голос сам — лишь если разрешено без подтверждения.
+            if (onlySpeak) {
+                handler.postDelayed({ finish() }, 20_000)
+                speak(r.title, alarm = false) { finish() }
+                return START_NOT_STICKY
+            }
+            val voice = r.speak && r.speakAuto && main
             val fl = r.flash && main
             var left = (if (r.sound || voice) 1 else 0) + (if (r.vibrate) 1 else 0) + (if (fl) 1 else 0)
             val one = { if (--left == 0) finish() }
@@ -292,6 +299,17 @@ class AlarmService : Service() {
         private const val EXTRA_RING = "ring"
         private const val EXTRA_AT = "at"
         private const val EXTRA_MAIN = "main"
+        private const val EXTRA_SPEAK = "speakOnly"
+
+        /** Кнопка «Прочитать» в уведомлении: прочитать название вслух, по явному нажатию. */
+        fun speakNow(ctx: Context, id: Int) {
+            val i = Intent(ctx, AlarmService::class.java).putExtra(EXTRA_ID, id).putExtra(EXTRA_SPEAK, true)
+                .putExtra(EXTRA_AT, System.currentTimeMillis())
+            try {
+                ContextCompat.startForegroundService(ctx, i)
+            } catch (_: Exception) {
+            }
+        }
         const val RING_MS = 60_000L
         private const val FLASHES = 8
 

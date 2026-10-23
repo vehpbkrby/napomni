@@ -58,6 +58,8 @@ data class Reminder(
     val sound: Boolean = true,
     val vibrate: Boolean = true,
     val loud: Boolean = false,
+    /** Читать вслух сразу; иначе — по кнопке «Прочитать» в уведомлении. */
+    val speakAuto: Boolean = false,
     /** Мелодия будильника (content://…); null — будильник телефона по умолчанию. */
     val melody: String? = null,
     val repeat: Boolean = false,
@@ -156,7 +158,7 @@ fun Reminder.rings(t: Trigger, now: Long): Boolean = loud && isMain(t) && now - 
  * Нужна служба: звук и вибрацию играет само приложение (канал уведомления — тихий), голос и вспышка —
  * только у главного срабатывания.
  */
-fun Reminder.effects(t: Trigger): Boolean = sound || vibrate || (isMain(t) && (speak || flash))
+fun Reminder.effects(t: Trigger): Boolean = sound || vibrate || (isMain(t) && ((speak && speakAuto) || flash))
 
 private fun Long?.after(now: Long) = this != null && this > now
 

@@ -101,7 +101,7 @@ class FlowTest {
         "Чайник".forEach { type(it.toString()) }
         // Поле на месте и в нём весь текст; выбор «когда» виден сразу.
         rule.onNode(hasSetTextAction() and hasText("Чайник")).assertIsFocused()
-        rule.onNodeWithText("Через").assertExists()
+        rule.onNodeWithText("В ближайшие сутки").assertExists()
         rule.onNodeWithText("В конкретные дни").assertExists()
     }
 
@@ -110,7 +110,7 @@ class FlowTest {
         openNew()
         type("Позвонить маме")
         val t0 = System.currentTimeMillis()
-        tap("Через")
+        tap("В ближайшие сутки")
         tap("15 мин")
         tap("Напомнить")
         val r = saved().single()
@@ -186,7 +186,7 @@ class FlowTest {
     fun alertTogglesCombineFreely() {
         openNew()
         type("Забрать посылку")
-        tap("Через")
+        tap("В ближайшие сутки")
         tap("30 мин")
         // Как напомнить: набор «Тихо», затем включаем только вибрацию и вспышку.
         tap("Тихо")
@@ -217,5 +217,42 @@ class FlowTest {
         rule.waitForIdle()
         list.performScrollToNode(hasText("Оплатить интернет"))
         rule.onNodeWithText("Оплатить интернет").assertExists()
+    }
+
+    @Test
+    fun soonByClockWithinADay() {
+        openNew()
+        type("Забрать ребёнка")
+        tap("В ближайшие сутки")
+        tap("К часу")
+        // Предложен ближайший целый час — сработает в пределах суток.
+        tap("Готово")
+        tap("Напомнить")
+        val r = saved().single()
+        val now = System.currentTimeMillis()
+        assertTrue(r.at > now && r.at <= now + 24 * 60 * MINUTE)
+        assertEquals(0, local(r.at).minute)
+    }
+
+    @Test
+    fun speakAskedByDefaultAndNormalPreset() {
+        openNew()
+        type("Анализы")
+        tap("В ближайшие сутки")
+        tap("1 ч")
+        // По умолчанию — «Обычно»; голос включаем, но без галочки он только по кнопке.
+        tap("Читать вслух")
+        rule.onNodeWithText("сразу, без подтверждения").assertExists()
+        tap("Напомнить")
+        val r = saved().single()
+        assertEquals(Way(sound = true, vibrate = true, speak = true, speakAuto = false), r.way)
+    }
+
+    @Test
+    fun templatesHideOnceYouStart() {
+        openNew()
+        rule.onNodeWithText("Через 3 мин").assertExists()
+        type("Свой текст")
+        rule.onNodeWithText("Через 3 мин").assertDoesNotExist()
     }
 }

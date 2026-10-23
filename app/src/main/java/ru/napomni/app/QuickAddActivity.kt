@@ -144,7 +144,7 @@ private enum class B { TEXT, WHEN, DETAIL, HOW }
 
 /** Когда напомнить — для разового события. Повторяющемуся остаётся только «перед событием». */
 private enum class Mode(val title: String, val sub: String) {
-    IN("Через", "от сейчас: 15 мин, 1 ч…"),
+    IN("В ближайшие сутки", "через 15 мин, 1 ч… или к часу"),
     BEFORE("Перед событием", "в день, за дни, за часы"),
     DATES("В конкретные дни", "отметить несколько дней"),
 }
@@ -225,6 +225,9 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
             }
         )
     }
+    // «В ближайшие сутки → к часу»: время суток в минутах; сработает ближайшее такое — сегодня или завтра.
+    var byClock by remember { mutableStateOf(false) }
+    var soonAt by remember { mutableStateOf<Int?>(null) }
     var inMin by remember {
         mutableStateOf(
             when {
@@ -245,7 +248,8 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
 
     // --- Как напомнить
     // Звук, вибрация, вспышка, голос, «как будильник», повтор — в любом сочетании; по умолчанию последний выбор.
-    var way by remember { mutableStateOf(edit?.way ?: Prefs.lastWay(ctx)) }
+    // Новое — всегда с «Обычно» (звук и вибрация); правка — как было сохранено.
+    var way by remember { mutableStateOf(edit?.way ?: Preset.NORMAL.way) }
     var melody by remember { mutableStateOf(if (edit != null) edit.melody else Prefs.lastMelody(ctx)) }
     var melodyMenu by remember { mutableStateOf(false) }
     val melodyName = remember(melody) { Melody.name(ctx, melody) }
@@ -285,11 +289,24 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         return x
     }
 
+    /** Ближайший момент с таким временем суток после [t]: сегодня, если ещё впереди, иначе завтра (не дальше суток). */
+    fun nextAt(minutes: Int, t: Long): Long {
+        val n = Fmt.local(t, zone)
+        val today = n.toLocalDate().atTime(minutes / 60, minutes % 60)
+        val at = if (today.isAfter(n)) today else today.plusDays(1)
+        return at.atZone(zone).toInstant().toEpochMilli()
+    }
+
+    /** Свёрнутая строка «В ближайшие сутки»: «через 2 ч» или «к 18:30». */
+    fun soonLine(): String = if (byClock) soonAt?.let { "к ${hm(it)}" } ?: "…" else inMin?.let { "через ${Fmt.dur(it)}" } ?: "…"
+
     /** Черновик — та же модель, что сохранится; null — не хватает выбора. */
     fun draft(t: Long): Reminder? {
         val dt = dayTime ?: NOON
         return when (effMode) {
-            Mode.IN -> inMin?.let { Reminder(id = 0, title = "", at = t + it * MINUTE, handledUntil = t) }
+            Mode.IN -> if (byClock) soonAt?.let { m ->
+                Reminder(id = 0, title = "", at = nextAt(m, t), handledUntil = t)
+            } else inMin?.let { Reminder(id = 0, title = "", at = t + it * MINUTE, handledUntil = t) }
             Mode.BEFORE -> {
                 val d = firstDate(date ?: return null)
                 // У события всегда есть время: при выборе даты ставится 12:00, его можно сменить.
@@ -324,7 +341,7 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
     val whenOk = recurring || date != null || mode != null
     val needDayTime = false
     val detailOk = when (effMode) {
-        Mode.IN -> inMin != null
+        Mode.IN -> if (byClock) soonAt != null else inMin != null
         // В день события напоминает само событие — «заранее» по желанию; время «заранее» не задано — 12:00.
         Mode.BEFORE -> date != null
         Mode.DATES -> dates.isNotEmpty()
@@ -455,7 +472,7 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
         if (recurring) append(" · ${rule.label}")
     }
     val whenLine = when (effMode) {
-        Mode.IN -> "Через ${inMin?.let { Fmt.dur(it) } ?: "…"}"
+        Mode.IN -> soonLine()
         Mode.BEFORE -> buildList {
             days.sorted().forEach { add("за ${Fmt.dur(it * 1440)}") }
             before.sorted().forEach { add("за ${Fmt.dur(it)}") }
@@ -622,8 +639,19 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                 val detailBelow = open == B.TEXT && date != null
                 if (recurOk && whenOk && (open != B.TEXT || detailBelow)) {
                     if (open == B.DETAIL || detailBelow) when (effMode) {
-                        Mode.IN -> StepBlock("Через сколько", BlockState.ACTIVE) {
-                            Chips {
+                        Mode.IN -> StepBlock("В ближайшие сутки", BlockState.ACTIVE) {
+                            Segmented(listOf("Через", "К часу"), if (byClock) 1 else 0) {
+                                byClock = it == 1
+                                // Выбираем здесь — блок держится открытым до «Готово» (или выбора срока).
+                                opened = B.DETAIL
+                                if (byClock && soonAt == null) {
+                                    // Предлагаем ближайший целый час; дальше — барабаном.
+                                    val n = Fmt.local(System.currentTimeMillis(), zone)
+                                    soonAt = ((n.hour + 1) % 24) * 60
+                                }
+                            }
+                            Spacer(Modifier.height(10.dp))
+                            if (!byClock) Chips {
                                 QUICK_OPTIONS.forEach { m ->
                                     Chip(Fmt.dur(m), selected = inMin == m) {
                                         inMin = m
@@ -631,6 +659,25 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                                     }
                                 }
                                 inMin?.takeIf { it !in QUICK_OPTIONS }?.let { m -> Chip(Fmt.dur(m), selected = true) {} }
+                            } else {
+                                val m = soonAt ?: 0
+                                TimeWheels(
+                                    hour = m / 60, minute = m % 60, rows = 3,
+                                    onHour = {
+                                        soonAt = it * 60 + (soonAt ?: 0) % 60
+                                        opened = B.DETAIL
+                                    },
+                                    onMinute = {
+                                        soonAt = (soonAt ?: 0) / 60 * 60 + it
+                                        opened = B.DETAIL
+                                    },
+                                )
+                                Text(
+                                    "сейчас ${Fmt.hm(Fmt.local(now, zone))} — можно до этого же времени завтра · сработает: " +
+                                        Fmt.compact(nextAt(m, now), now),
+                                    fontSize = 12.sp, color = p.textSub, modifier = Modifier.padding(top = 6.dp),
+                                )
+                                MainButton("Готово", Modifier.fillMaxWidth().padding(top = 8.dp), height = 44.dp) { opened = null }
                             }
                         }
                         Mode.BEFORE -> StepBlock(
@@ -711,12 +758,12 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                         null -> {}
                     } else if (detailOk) DoneRow(
                         when (effMode) {
-                            Mode.IN -> "Через"
+                            Mode.IN -> "В ближайшие сутки"
                             Mode.BEFORE -> "Напомнить"
                             else -> "В дни"
                         },
                         when (effMode) {
-                            Mode.IN -> inMin?.let { Fmt.dur(it) } ?: ""
+                            Mode.IN -> soonLine()
                             else -> whenLine
                         },
                     ) { opened = B.DETAIL }
@@ -759,7 +806,9 @@ private fun Wizard(edit: Reminder?, preset: String?, day: LocalDate?, onClose: (
                 }
 
                 // ---------- Заготовки: быстрый выбор вместо ручного заполнения ----------
-                if (edit == null && templates.isNotEmpty()) Column(Modifier.padding(horizontal = side).padding(top = 18.dp)) {
+                // Заготовки — пока экран пуст; начали своё (текст, дата, выбор «когда») — они уже не нужны.
+                val fresh = text.text.isBlank() && date == null && mode == null && preset == null
+                if (edit == null && fresh && templates.isNotEmpty()) Column(Modifier.padding(horizontal = side).padding(top = 18.dp)) {
                     BlockLabel("Заготовки", p.accentText, Modifier.padding(bottom = 8.dp))
                     templates.chunked(2).forEach { row ->
                         Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

@@ -76,10 +76,16 @@ object Actions {
     const val SNOOZE_10 = "ru.napomni.app.SNOOZE_10"
     const val SNOOZE_60 = "ru.napomni.app.SNOOZE_60"
     const val DISMISS = "ru.napomni.app.DISMISS"
+    const val SPEAK = "ru.napomni.app.SPEAK"
     const val EXTRA_ID = "id"
 
     fun handle(ctx: Context, id: Int, action: String?) {
         val now = System.currentTimeMillis()
+        // «Прочитать» — только голос, уведомление остаётся.
+        if (action == SPEAK) {
+            AlarmService.speakNow(ctx, id)
+            return
+        }
         when (action) {
             DONE -> Store.edit(ctx, id) { if (it.rule != Rule.NONE) it.skipped(now) else it.copy(done = true).reacted() }
             SNOOZE_10 -> Store.edit(ctx, id) { it.snoozed(now, 10) }

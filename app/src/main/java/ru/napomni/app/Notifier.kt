@@ -123,6 +123,8 @@ object Notifier {
             b.addAction(0, "Отложить 10 мин", Actions.pending(ctx, r.id, Actions.SNOOZE_10))
         }
         b.addAction(0, "Отложить 1 ч", Actions.pending(ctx, r.id, Actions.SNOOZE_60))
+        // Голос по кнопке: название вслух только после явного нажатия.
+        if (r.speak && !r.speakAuto && !ring) b.addAction(0, "Прочитать", Actions.pending(ctx, r.id, Actions.SPEAK))
         return b.build()
     }
 

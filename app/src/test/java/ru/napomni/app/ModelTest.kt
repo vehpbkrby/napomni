@@ -114,7 +114,7 @@ class ModelTest {
     }
 
     @Test fun effectsOnlyForMain() {
-        val v = r.copy(speak = true)
+        val v = r.copy(speak = true, speakAuto = true)
         val quiet = v.copy(sound = false, vibrate = false)
         // Без звука и вибрации голос нужен только у главного срабатывания.
         assertFalse(quiet.effects(Trigger(ms(17, 19), Kind.DAY, day = 1)))
@@ -172,7 +172,8 @@ class ModelTest {
         assertEquals(Preset.NORMAL.way, Way.fromOld("SOUND"))
         val w = Way(sound = true, vibrate = false, flash = true, speak = true)
         assertEquals(w, Way.decode(w.encode()))
-        assertEquals("звук · вспышка · голос", w.label())
+        assertEquals("звук · вспышка · голос по кнопке", w.label())
+        assertEquals("звук · вспышка · голос", w.copy(speakAuto = true).label())
         assertEquals(null, Preset.NORMAL.way.shortLabel())
         assertEquals("тихо", Preset.QUIET.way.label())
     }
