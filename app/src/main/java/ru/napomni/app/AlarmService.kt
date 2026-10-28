@@ -115,7 +115,7 @@ class AlarmService : Service() {
     private fun startRinging(r: Reminder) {
         if (r.sound) {
             val candidates = listOfNotNull(
-                r.melody?.let { Uri.parse(it) },
+                Melody.uri(this, r.melody),
                 Settings.System.DEFAULT_ALARM_ALERT_URI,
                 RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
                 RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
@@ -139,7 +139,7 @@ class AlarmService : Service() {
             }
         }
         val candidates = listOfNotNull(
-            r.melody?.let { Uri.parse(it) },
+            Melody.uri(this, r.melody),
             Settings.System.DEFAULT_NOTIFICATION_URI,
             RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
         )

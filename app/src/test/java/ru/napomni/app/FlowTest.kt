@@ -255,4 +255,16 @@ class FlowTest {
         type("Свой текст")
         rule.onNodeWithText("Через 3 мин").assertDoesNotExist()
     }
+
+    @Test
+    fun builtinMelodyByDefault() {
+        openNew()
+        type("Таблетки")
+        tap("В ближайшие сутки")
+        tap("15 мин")
+        // Без выбора звучат встроенные сигналы точного времени.
+        rule.onNodeWithText(Melody.BUILTIN_NAME).assertExists()
+        tap("Напомнить")
+        assertEquals(null, saved().single().melody)
+    }
 }

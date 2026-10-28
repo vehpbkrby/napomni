@@ -39,6 +39,19 @@ object Prefs {
 object Melody {
     data class Tone(val uri: String?, val name: String)
 
+    /** Без выбора (null) звучит встроенная; «Как в телефоне» — отдельный выбор. */
+    const val PHONE = "phone"
+    const val BUILTIN_NAME = "Сигналы точного времени"
+
+    fun builtin(ctx: Context): Uri = Uri.parse("android.resource://${ctx.packageName}/${R.raw.mayak}")
+
+    /** Что играть: свой файл или мелодия телефона, встроенная — без выбора; null — звук телефона по умолчанию. */
+    fun uri(ctx: Context, melody: String?): Uri? = when (melody) {
+        null -> builtin(ctx)
+        PHONE -> null
+        else -> Uri.parse(melody)
+    }
+
     /** Мелодии будильника, что есть в телефоне, — для своего меню выбора. */
     fun alarmTones(ctx: Context): List<Tone> = try {
         val rm = RingtoneManager(ctx).apply { setType(RingtoneManager.TYPE_NOTIFICATION or RingtoneManager.TYPE_ALARM) }
@@ -52,7 +65,8 @@ object Melody {
 
     /** Название для строки «Мелодия»: звук телефона — по его названию, свой файл — по имени файла. */
     fun name(ctx: Context, uri: String?): String {
-        if (uri == null) return "Как в телефоне"
+        if (uri == null) return BUILTIN_NAME
+        if (uri == PHONE) return "Как в телефоне"
         val u = Uri.parse(uri)
         return try {
             if (u.authority == "media" || u.authority == "settings") {

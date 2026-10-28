@@ -1087,8 +1087,8 @@ private fun MelodyPicker(current: String?, onPick: (String?) -> Unit, onFile: ()
     var ringtone by remember { mutableStateOf<Ringtone?>(null) }
     LaunchedEffect(Unit) {
         val list = withContext(Dispatchers.IO) { Melody.alarmTones(ctx) }
-        tones = listOf(Melody.Tone(null, "Как в телефоне")) + list +
-            listOfNotNull(current?.takeIf { c -> list.none { it.uri == c } }?.let { Melody.Tone(it, Melody.name(ctx, it)) })
+        tones = listOf(Melody.Tone(null, Melody.BUILTIN_NAME), Melody.Tone(Melody.PHONE, "Как в телефоне")) + list +
+            listOfNotNull(current?.takeIf { c -> c != Melody.PHONE && list.none { it.uri == c } }?.let { Melody.Tone(it, Melody.name(ctx, it)) })
     }
     fun stop() {
         ringtone?.stop()
@@ -1133,7 +1133,7 @@ private fun MelodyPicker(current: String?, onPick: (String?) -> Unit, onFile: ()
                             LinkButton(if (playing == key) "■" else "▶") {
                                 if (playing == key) stop() else {
                                     stop()
-                                    val uri = t.uri?.let { Uri.parse(it) } ?: Settings.System.DEFAULT_ALARM_ALERT_URI
+                                    val uri = Melody.uri(ctx, t.uri) ?: Settings.System.DEFAULT_ALARM_ALERT_URI
                                     ringtone = RingtoneManager.getRingtone(ctx, uri)?.apply {
                                         audioAttributes = AudioAttributes.Builder()
                                             .setUsage(AudioAttributes.USAGE_ALARM)
